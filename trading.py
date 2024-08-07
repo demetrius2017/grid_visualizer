@@ -5,12 +5,13 @@ from orders import OrderManager
 class TradingSimulator:
     def __init__(self, graph):
         self.graph = graph
-        self.order_manager = OrderManager()
+        self.grid_step = 0.01  # Шаг сетки, можно настроить
+        self.order_manager = OrderManager(self.grid_step)
         self.current_price = 0.5
         self.volatility = 0.005
         self.stop_simulation = True
-        self.grid_size = 10
-        self.grid_step = 0.01  # Шаг сетки, измените на нужное значение
+        self.grid_size = 20
+        self.grid_step = 0.08  # Шаг сетки, измените на нужное значение
         self.grid_levels = 5  # Количество уровней ордеров в каждую сторону
 
         self.timer = QtCore.QTimer()

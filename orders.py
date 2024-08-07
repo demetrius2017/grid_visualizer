@@ -5,14 +5,19 @@ class Order:
         self.volume = volume
         self.executed = False
 
+
 class OrderManager:
-    def __init__(self):
+    def __init__(self, grid_step):
         self.orders = []
         self.balance = 10000
         self.order_history = []
+        self.grid_step = grid_step  # Сохраняем шаг сетки
 
     def clear_orders(self):
         self.orders = []  # Очищаем список ордеров
+
+    def get_orders(self):
+        return self.orders
 
     def place_order(self, order_type, price, volume):
         order = Order(order_type, price, volume)
@@ -21,21 +26,22 @@ class OrderManager:
     def check_orders(self, current_price):
         for order in self.orders:
             if not order.executed:
-                if (order.order_type == 'buy' and current_price <= order.price) or (order.order_type == 'sell' and current_price >= order.price):
+                if (order.order_type == "buy" and current_price <= order.price) or (
+                    order.order_type == "sell" and current_price >= order.price
+                ):
                     self.execute_order(order, current_price)
 
     def execute_order(self, order, execution_price):
         order.executed = True
         self.order_history.append(order)
-        if order.order_type == 'buy':
+        if order.order_type == "buy":
             self.balance -= order.volume * execution_price
             # Автоматически создаем ордер на продажу через заданный шаг
-            self.place_order('sell', execution_price + self.grid_step, order.volume)
-        elif order.order_type == 'sell':
+            self.place_order("sell", execution_price + self.grid_step, order.volume)
+        elif order.order_type == "sell":
             self.balance += order.volume * execution_price
             # Автоматически создаем ордер на покупку через заданный шаг
-            self.place_order('buy', execution_price - self.grid_step, order.volume)
-
+            self.place_order("buy", execution_price - self.grid_step, order.volume)
 
     def get_order_history(self):
         return self.order_history
