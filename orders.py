@@ -11,6 +11,9 @@ class OrderManager:
         self.balance = 10000
         self.order_history = []
 
+    def clear_orders(self):
+        self.orders = []  # Очищаем список ордеров
+
     def place_order(self, order_type, price, volume):
         order = Order(order_type, price, volume)
         self.orders.append(order)
@@ -26,8 +29,13 @@ class OrderManager:
         self.order_history.append(order)
         if order.order_type == 'buy':
             self.balance -= order.volume * execution_price
+            # Автоматически создаем ордер на продажу через заданный шаг
+            self.place_order('sell', execution_price + self.grid_step, order.volume)
         elif order.order_type == 'sell':
             self.balance += order.volume * execution_price
+            # Автоматически создаем ордер на покупку через заданный шаг
+            self.place_order('buy', execution_price - self.grid_step, order.volume)
+
 
     def get_order_history(self):
         return self.order_history

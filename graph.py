@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets
 import pyqtgraph as pg
 
 class MarketGraph(QtWidgets.QWidget):
@@ -24,3 +24,13 @@ class MarketGraph(QtWidgets.QWidget):
         if len(self.data) > 100:
             self.data.pop(0)
         self.curve.setData(self.data)
+
+    def update_orders(self, orders):
+        for order in orders:
+            if not order.executed:
+                if order.order_type == 'buy':
+                    color = 'g'
+                elif order.order_type == 'sell':
+                    color = 'r'
+                line = pg.InfiniteLine(pos=order.price, angle=0, pen=color)
+                self.graphWidget.addItem(line)
