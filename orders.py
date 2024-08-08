@@ -14,15 +14,21 @@ class OrderManager:
         self.grid_step_percent = grid_step_percent
         self.profit = 0
         self.floating_profit = 0
+        self.free_margin = self.balance
 
     def place_order(self, order_type, price, volume):
-        if price > 0:
+        required_margin = price * volume
+        if price > 0 and self.free_margin >= required_margin:
             order = Order(order_type, price, volume)
             self.orders.append(order)
-            print(f"Placed {order_type} order at {price} for {volume} units")
+            self.free_margin -= required_margin
+            print(f"Placed {order_type} order at {price} for {volume} units. Free Margin: {self.free_margin}")
+        else:
+            print(f"Insufficient margin to place {order_type} order at {price} for {volume} units")
 
     def check_orders(self, current_price):
         self.calculate_floating_profit(current_price)
+        self.calculate_free_margin()
         for order in self.orders:
             if not order.executed:
                 if (order.order_type == "buy" and current_price <= order.price) or (
@@ -45,8 +51,9 @@ class OrderManager:
         self.profit += order.volume * (
             execution_price - order.price if order.order_type == "sell" else order.price - execution_price
         )
+        self.update_free_margin_after_execution()
         print(
-            f"Executed {order.order_type} order at {execution_price} for {order.volume} units. New balance: {self.balance}, Profit: {self.profit}"
+            f"Executed {order.order_type} order at {execution_price} for {order.volume} units. New balance: {self.balance}, Profit: {self.profit}, Free Margin: {self.free_margin}"
         )
 
     def calculate_floating_profit(self, current_price):
@@ -58,6 +65,16 @@ class OrderManager:
                 elif order.order_type == "sell":
                     self.floating_profit += (order.price - current_price) * order.volume
         print(f"Floating Profit: {self.floating_profit}")
+
+    def calculate_free_margin(self):
+        total_order_value = sum(order.price * order.volume for order in self.orders if not order.executed)
+        self.free_margin = self.balance + self.floating_profit - total_order_value
+        print(f"Free Margin: {self.free_margin}")
+
+    def update_free_margin_after_execution(self):
+        total_executed_order_value = sum(order.price * order.volume for order in self.orders if order.executed)
+        self.free_margin = self.balance + self.floating_profit - total_executed_order_value
+        print(f"Updated Free Margin: {self.free_margin}")
 
     def get_order_history(self):
         return self.order_history
@@ -71,6 +88,9 @@ class OrderManager:
     def get_floating_profit(self):
         return self.floating_profit
 
+    def get_free_margin(self):
+        return self.free_margin
+
     def initialize_grid(self, ema, num_orders, volume):
         self.clear_orders()
         for i in range(num_orders):
@@ -78,9 +98,13 @@ class OrderManager:
             sell_price = ema[-1] + (ema[-1] * self.grid_step_percent / 100) * (i + 1)
             self.place_order("buy", buy_price, volume)
             self.place_order("sell", sell_price, volume)
+        self.calculate_free_margin()
 
     def clear_orders(self):
+        # Add floating profit to the balance before clearing
+        self.balance += self.floating_profit
         self.orders = []
+        self.floating_profit = 0
         print("Cleared all existing orders")
 
     def update_grid(self, ema, num_orders, volume):

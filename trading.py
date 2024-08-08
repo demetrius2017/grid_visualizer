@@ -59,6 +59,8 @@ class TradingSimulator:
                     self.initialize_grid()
                 else:
                     self.order_manager.update_grid(self.ema, 10, 1)
+
+                self.update_report()
             else:
                 self.graph.update_graph(new_price)
                 self.current_price = new_price
@@ -69,6 +71,14 @@ class TradingSimulator:
             num_orders = 10  # Количество ордеров в каждом направлении
             volume = 1  # Объем каждого ордера
             self.order_manager.initialize_grid(self.ema, num_orders, volume)
+
+    def update_report(self):
+        balance = self.order_manager.get_balance()
+        profit = self.order_manager.get_profit()
+        floating_profit = self.order_manager.get_floating_profit()
+        free_margin = self.order_manager.get_free_margin()
+        self.graph.update_report(balance, profit, floating_profit, free_margin)
+        print(f"Balance: {balance}, Profit: {profit}, Floating Profit: {floating_profit}, Free Margin: {free_margin}")
 
     def mouse_moved(self, evt):
         pos = evt

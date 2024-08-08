@@ -2,7 +2,6 @@ from PyQt5 import QtWidgets, QtCore
 from graph import MarketGraph
 from trading import TradingSimulator
 
-
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -73,13 +72,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def place_buy_order(self):
         price = self.simulator.current_price
         volume = 1
-        self.order_manager.place_order("buy", price, volume)
+        self.order_manager.place_order('buy', price, volume)
         self.statusBar().showMessage(f"Buy order placed at {price}")
 
     def place_sell_order(self):
         price = self.simulator.current_price
         volume = 1
-        self.order_manager.place_order("sell", price, volume)
+        self.order_manager.place_order('sell', price, volume)
         self.statusBar().showMessage(f"Sell order placed at {price}")
 
     def start_simulation(self):
@@ -96,8 +95,8 @@ class MainWindow(QtWidgets.QMainWindow):
             settings = grid_settings_dialog.get_settings()
             self.simulator.set_grid_settings(settings)
             base_price = self.simulator.current_price
-            num_orders = settings["num_orders"]
-            volume = settings["volume"]
+            num_orders = settings['num_orders']
+            volume = settings['volume']
             self.order_manager.initialize_grid(base_price, num_orders, volume)
             self.statusBar().showMessage("Grid initialized")
 
@@ -105,10 +104,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.graph.update_orders(self.order_manager.orders)
 
     def update_profit(self):
-        self.statusBar().showMessage(
-            f"Profit: {self.order_manager.get_profit()}, Balance: {self.order_manager.get_balance()}"
-        )
-
+        balance = self.order_manager.get_balance()
+        profit = self.order_manager.get_profit()
+        floating_profit = self.order_manager.get_floating_profit()
+        free_margin = self.order_manager.get_free_margin()
+        self.graph.update_report(balance, profit, floating_profit, free_margin)
+        self.statusBar().showMessage(f"Balance: {balance}, Profit: {profit}, Floating Profit: {floating_profit}, Free Margin: {free_margin}")
 
 class GridSettingsDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
@@ -141,16 +142,16 @@ class GridSettingsDialog(QtWidgets.QDialog):
         self.setLayout(self.layout)
 
         self.buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel, QtCore.Qt.Horizontal, self
-        )
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
+            QtCore.Qt.Horizontal, self)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         self.layout.addRow(self.buttons)
 
     def get_settings(self):
         return {
-            "grid_size": self.grid_size_input.value(),
-            "volatility": self.volatility_input.value(),
-            "num_orders": self.num_orders_input.value(),
-            "volume": self.volume_input.value(),
+            'grid_size': self.grid_size_input.value(),
+            'volatility': self.volatility_input.value(),
+            'num_orders': self.num_orders_input.value(),
+            'volume': self.volume_input.value()
         }

@@ -23,6 +23,9 @@ class MarketGraph(QtWidgets.QWidget):
         self.ema_data = []
         self.order_history = []
 
+        self.report_label = QtWidgets.QLabel(self)
+        layout.addWidget(self.report_label)
+
     def update_graph(self, new_price):
         self.data.append(new_price)
         if len(self.data) > 100:
@@ -50,3 +53,8 @@ class MarketGraph(QtWidgets.QWidget):
 
     def add_order_to_history(self, order):
         self.order_history.append(order)
+
+    def update_report(self, balance, profit, floating_profit, free_margin):
+        self.report_label.setText(
+            f"Balance: {balance:.2f}, Profit: {profit:.2f}, Floating Profit: {floating_profit:.2f}, Free Margin: {free_margin:.2f}"
+        )
