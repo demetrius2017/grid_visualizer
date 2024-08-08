@@ -1,157 +1,79 @@
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets
 from graph import MarketGraph
 from trading import TradingSimulator
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Market Trading Simulator")
-        self.setGeometry(100, 100, 1200, 800)
+
+        self.setWindowTitle("Trading Simulator")
 
         self.graph = MarketGraph()
         self.simulator = TradingSimulator(self.graph)
 
-        self.setCentralWidget(self.graph)
-
-        self.order_manager = self.simulator.order_manager
-
         self.initUI()
 
     def initUI(self):
-        self.create_actions()
-        self.create_menus()
-        self.create_toolbar()
+        self.start_button = QtWidgets.QPushButton("Start Simulation", self)
+        self.start_button.clicked.connect(self.simulator.start)
 
-        self.statusBar().showMessage("Ready")
+        self.stop_button = QtWidgets.QPushButton("Stop Simulation", self)
+        self.stop_button.clicked.connect(self.simulator.stop)
 
-        self.order_timer = QtCore.QTimer()
-        self.order_timer.timeout.connect(self.update_orders)
-        self.order_timer.start(100)
+        self.grid_settings_button = QtWidgets.QPushButton("Grid Settings", self)
+        self.grid_settings_button.clicked.connect(self.show_grid_settings)
 
-        self.profit_timer = QtCore.QTimer()
-        self.profit_timer.timeout.connect(self.update_profit)
-        self.profit_timer.start(1000)
+        self.init_grid_button = QtWidgets.QPushButton("Initialize Grid", self)
+        self.init_grid_button.clicked.connect(self.initialize_grid)
 
-    def create_actions(self):
-        self.buy_action = QtWidgets.QAction("&Buy", self)
-        self.buy_action.triggered.connect(self.place_buy_order)
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.graph)
+        layout.addWidget(self.start_button)
+        layout.addWidget(self.stop_button)
+        layout.addWidget(self.grid_settings_button)
+        layout.addWidget(self.init_grid_button)
 
-        self.sell_action = QtWidgets.QAction("&Sell", self)
-        self.sell_action.triggered.connect(self.place_sell_order)
-
-        self.start_action = QtWidgets.QAction("&Start", self)
-        self.start_action.triggered.connect(self.start_simulation)
-
-        self.stop_action = QtWidgets.QAction("&Stop", self)
-        self.stop_action.triggered.connect(self.stop_simulation)
-
-        self.grid_settings_action = QtWidgets.QAction("&Grid Settings and Initialize", self)
-        self.grid_settings_action.triggered.connect(self.show_grid_settings)
-
-    def create_menus(self):
-        menubar = self.menuBar()
-        order_menu = menubar.addMenu("&Orders")
-        order_menu.addAction(self.buy_action)
-        order_menu.addAction(self.sell_action)
-
-        simulation_menu = menubar.addMenu("&Simulation")
-        simulation_menu.addAction(self.start_action)
-        simulation_menu.addAction(self.stop_action)
-
-        settings_menu = menubar.addMenu("&Settings")
-        settings_menu.addAction(self.grid_settings_action)
-
-    def create_toolbar(self):
-        toolbar = self.addToolBar("Main Toolbar")
-        toolbar.addAction(self.start_action)
-        toolbar.addAction(self.stop_action)
-        toolbar.addAction(self.buy_action)
-        toolbar.addAction(self.sell_action)
-        toolbar.addAction(self.grid_settings_action)
-
-    def place_buy_order(self):
-        price = self.simulator.current_price
-        volume = 1
-        self.order_manager.place_order('buy', price, volume)
-        self.statusBar().showMessage(f"Buy order placed at {price}")
-
-    def place_sell_order(self):
-        price = self.simulator.current_price
-        volume = 1
-        self.order_manager.place_order('sell', price, volume)
-        self.statusBar().showMessage(f"Sell order placed at {price}")
-
-    def start_simulation(self):
-        self.simulator.start()
-        self.statusBar().showMessage("Simulation started")
-
-    def stop_simulation(self):
-        self.simulator.stop()
-        self.statusBar().showMessage("Simulation stopped")
+        container = QtWidgets.QWidget()
+        container.setLayout(layout)
+        self.setCentralWidget(container)
 
     def show_grid_settings(self):
-        grid_settings_dialog = GridSettingsDialog(self)
-        if grid_settings_dialog.exec_():
-            settings = grid_settings_dialog.get_settings()
-            self.simulator.set_grid_settings(settings)
-            base_price = self.simulator.current_price
-            num_orders = settings['num_orders']
-            volume = settings['volume']
-            self.order_manager.initialize_grid(base_price, num_orders, volume)
-            self.statusBar().showMessage("Grid initialized")
+        dialog = GridSettingsDialog(self.simulator)
+        dialog.exec_()
 
-    def update_orders(self):
-        self.graph.update_orders(self.order_manager.orders)
+    def initialize_grid(self):
+        self.simulator.initialize_grid()
 
-    def update_profit(self):
-        balance = self.order_manager.get_balance()
-        profit = self.order_manager.get_profit()
-        floating_profit = self.order_manager.get_floating_profit()
-        free_margin = self.order_manager.get_free_margin()
-        self.graph.update_report(balance, profit, floating_profit, free_margin)
-        self.statusBar().showMessage(f"Balance: {balance}, Profit: {profit}, Floating Profit: {floating_profit}, Free Margin: {free_margin}")
 
 class GridSettingsDialog(QtWidgets.QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self, simulator):
+        super().__init__()
+        self.simulator = simulator
         self.setWindowTitle("Grid Settings")
 
-        self.grid_size_label = QtWidgets.QLabel("Grid Step (%):", self)
         self.grid_size_input = QtWidgets.QDoubleSpinBox(self)
-        self.grid_size_input.setRange(0.01, 100.00)
         self.grid_size_input.setDecimals(2)
+        self.grid_size_input.setRange(0.01, 10.00)
+        self.grid_size_input.setValue(self.simulator.grid_size)
 
-        self.volatility_label = QtWidgets.QLabel("Volatility:", self)
         self.volatility_input = QtWidgets.QDoubleSpinBox(self)
-        self.volatility_input.setRange(0.001, 0.1)
-        self.volatility_input.setSingleStep(0.001)
+        self.volatility_input.setDecimals(5)
+        self.volatility_input.setRange(0.00001, 1.00000)
+        self.volatility_input.setValue(self.simulator.volatility)
 
-        self.num_orders_label = QtWidgets.QLabel("Number of Orders:", self)
-        self.num_orders_input = QtWidgets.QSpinBox(self)
-        self.num_orders_input.setRange(1, 100)
+        layout = QtWidgets.QFormLayout()
+        layout.addRow("Grid Size (%)", self.grid_size_input)
+        layout.addRow("Volatility", self.volatility_input)
 
-        self.volume_label = QtWidgets.QLabel("Volume per Order:", self)
-        self.volume_input = QtWidgets.QSpinBox(self)
-        self.volume_input.setRange(1, 1000)
+        self.button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.apply_settings)
+        self.button_box.rejected.connect(self.reject)
 
-        self.layout = QtWidgets.QFormLayout()
-        self.layout.addRow(self.grid_size_label, self.grid_size_input)
-        self.layout.addRow(self.volatility_label, self.volatility_input)
-        self.layout.addRow(self.num_orders_label, self.num_orders_input)
-        self.layout.addRow(self.volume_label, self.volume_input)
-        self.setLayout(self.layout)
+        layout.addWidget(self.button_box)
+        self.setLayout(layout)
 
-        self.buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
-            QtCore.Qt.Horizontal, self)
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-        self.layout.addRow(self.buttons)
-
-    def get_settings(self):
-        return {
-            'grid_size': self.grid_size_input.value(),
-            'volatility': self.volatility_input.value(),
-            'num_orders': self.num_orders_input.value(),
-            'volume': self.volume_input.value()
-        }
+    def apply_settings(self):
+        settings = {"grid_size": self.grid_size_input.value(), "volatility": self.volatility_input.value()}
+        self.simulator.set_grid_settings(settings)
+        self.accept()
