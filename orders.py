@@ -59,7 +59,7 @@ class OrderManager:
                     self.floating_profit += (current_price - order.price) * order.volume
                 elif order.order_type == 'sell':
                     self.floating_profit += (order.price - current_price) * order.volume
-        print(f"Floating Profit: {self.floating_profit}")
+        print(f"Floating Profit calculated: {self.floating_profit}")
 
     def calculate_free_margin(self):
         total_order_value = sum(order.price * order.volume for order in self.orders if not order.executed)
@@ -95,21 +95,28 @@ class OrderManager:
         for i in range(num_orders):
             buy_price = current_price - (current_price * self.grid_step_percent / 100) * (i + 1)
             sell_price = current_price + (current_price * self.grid_step_percent / 100) * (i + 1)
-            if buy_price < current_price:
+            if buy_price > 0:  # Проверка, чтобы цена ордера не была отрицательной
                 self.place_order('buy', buy_price, volume_per_order)
-            if sell_price > current_price:
+            if sell_price > 0:
                 self.place_order('sell', sell_price, volume_per_order)
         self.calculate_free_margin()
         print("Initial grid setup complete. Pausing for verification...")
         # time.sleep(5)  # Пауза на 5 секунд для проверки
 
+    def update_grid(self, ema, num_orders, volume):
+        for order in self.orders:
+            if not order.executed:
+                if order.order_type == 'buy':
+                    new_price = ema[-1] - (ema[-1] * self.grid_step_percent / 100) * (num_orders - len([o for o in self.orders if o.order_type == 'buy' and o.executed]))
+                    if new_price > 0:  # Проверка, чтобы цена ордера не была отрицательной
+                        order.price = new_price
+                elif order.order_type == 'sell':
+                    new_price = ema[-1] + (ema[-1] * self.grid_step_percent / 100) * (num_orders - len([o for o in self.orders if o.order_type == 'sell' and o.executed]))
+                    if new_price > 0:
+                        order.price = new_price
+
     def clear_orders(self):
-        # Add floating profit to the balance before clearing
         self.balance += self.floating_profit
         self.orders = []
         self.floating_profit = 0
         print("Cleared all existing orders")
-
-    def update_grid(self, ema, num_orders, volume):
-        self.clear_orders()
-        self.initialize_grid(ema, num_orders, volume)
