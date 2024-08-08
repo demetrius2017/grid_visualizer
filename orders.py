@@ -6,6 +6,7 @@ class Order:
         self.price = price
         self.volume = volume
         self.executed = False
+        self.execution_price = None
 
 class OrderManager:
     def __init__(self, grid_step_percent):
@@ -37,6 +38,7 @@ class OrderManager:
 
     def execute_order(self, order, execution_price):
         order.executed = True
+        order.execution_price = execution_price
         self.order_history.append(order)
         if order.order_type == 'buy':
             self.balance -= order.volume * execution_price
@@ -101,7 +103,7 @@ class OrderManager:
                 self.place_order('sell', sell_price, volume_per_order)
         self.calculate_free_margin()
         print("Initial grid setup complete. Pausing for verification...")
-        # time.sleep(5)  # Пауза на 5 секунд для проверки
+        time.sleep(5)  # Пауза на 5 секунд для проверки
 
     def update_grid(self, ema, num_orders, volume):
         for order in self.orders:
