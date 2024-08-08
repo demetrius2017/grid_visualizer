@@ -7,6 +7,7 @@ class Order:
         self.volume = volume
         self.executed = False
         self.execution_price = None
+        self.profit = 0  # Добавляем атрибут для хранения прибыли
 
 class OrderManager:
     def __init__(self, grid_step_percent):
@@ -49,7 +50,8 @@ class OrderManager:
             new_price = order.price - (order.price * self.grid_step_percent / 100)
             self.place_order('buy', new_price, order.volume)
         
-        self.profit += order.volume * (execution_price - order.price if order.order_type == 'sell' else order.price - execution_price)
+        order.profit = order.volume * (execution_price - order.price if order.order_type == 'sell' else order.price - execution_price)
+        self.profit += order.profit
         self.update_free_margin_after_execution()
         print(f"Executed {order.order_type} order at {execution_price} for {order.volume} units. New balance: {self.balance}, Profit: {self.profit}, Free Margin: {self.free_margin}")
 
