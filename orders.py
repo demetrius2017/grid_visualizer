@@ -13,6 +13,7 @@ class OrderManager:
         self.order_history = []
         self.grid_step_percent = grid_step_percent
         self.profit = 0
+        self.floating_profit = 0
 
     def place_order(self, order_type, price, volume):
         if price > 0:
@@ -21,6 +22,7 @@ class OrderManager:
             print(f"Placed {order_type} order at {price} for {volume} units")
 
     def check_orders(self, current_price):
+        self.calculate_floating_profit(current_price)
         for order in self.orders:
             if not order.executed:
                 if (order.order_type == "buy" and current_price <= order.price) or (
@@ -47,6 +49,16 @@ class OrderManager:
             f"Executed {order.order_type} order at {execution_price} for {order.volume} units. New balance: {self.balance}, Profit: {self.profit}"
         )
 
+    def calculate_floating_profit(self, current_price):
+        self.floating_profit = 0
+        for order in self.orders:
+            if not order.executed:
+                if order.order_type == "buy":
+                    self.floating_profit += (current_price - order.price) * order.volume
+                elif order.order_type == "sell":
+                    self.floating_profit += (order.price - current_price) * order.volume
+        print(f"Floating Profit: {self.floating_profit}")
+
     def get_order_history(self):
         return self.order_history
 
@@ -56,14 +68,21 @@ class OrderManager:
     def get_profit(self):
         return self.profit
 
-    def initialize_grid(self, base_price, num_orders, volume):
+    def get_floating_profit(self):
+        return self.floating_profit
+
+    def initialize_grid(self, ema, num_orders, volume):
         self.clear_orders()
-        for i in range(1, num_orders + 1):
-            buy_price = base_price - (base_price * self.grid_step_percent / 100) * i
-            sell_price = base_price + (base_price * self.grid_step_percent / 100) * i
+        for i in range(num_orders):
+            buy_price = ema[-1] - (ema[-1] * self.grid_step_percent / 100) * (i + 1)
+            sell_price = ema[-1] + (ema[-1] * self.grid_step_percent / 100) * (i + 1)
             self.place_order("buy", buy_price, volume)
             self.place_order("sell", sell_price, volume)
 
     def clear_orders(self):
         self.orders = []
         print("Cleared all existing orders")
+
+    def update_grid(self, ema, num_orders, volume):
+        self.clear_orders()
+        self.initialize_grid(ema, num_orders, volume)
