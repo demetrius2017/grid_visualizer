@@ -7,21 +7,18 @@ class Order:
 
 
 class OrderManager:
-    def __init__(self, grid_step):
+    def __init__(self, grid_step_percent):
         self.orders = []
         self.balance = 10000
         self.order_history = []
-        self.grid_step = grid_step  # Сохраняем шаг сетки
-
-    def clear_orders(self):
-        self.orders = []  # Очищаем список ордеров
-
-    def get_orders(self):
-        return self.orders
+        self.grid_step_percent = grid_step_percent
+        self.profit = 0
 
     def place_order(self, order_type, price, volume):
-        order = Order(order_type, price, volume)
-        self.orders.append(order)
+        if price > 0:
+            order = Order(order_type, price, volume)
+            self.orders.append(order)
+            print(f"Placed {order_type} order at {price} for {volume} units")
 
     def check_orders(self, current_price):
         for order in self.orders:
@@ -36,15 +33,37 @@ class OrderManager:
         self.order_history.append(order)
         if order.order_type == "buy":
             self.balance -= order.volume * execution_price
-            # Автоматически создаем ордер на продажу через заданный шаг
-            self.place_order("sell", execution_price + self.grid_step, order.volume)
+            new_price = order.price + (order.price * self.grid_step_percent / 100)
+            self.place_order("sell", new_price, order.volume)
         elif order.order_type == "sell":
             self.balance += order.volume * execution_price
-            # Автоматически создаем ордер на покупку через заданный шаг
-            self.place_order("buy", execution_price - self.grid_step, order.volume)
+            new_price = order.price - (order.price * self.grid_step_percent / 100)
+            self.place_order("buy", new_price, order.volume)
+
+        self.profit += order.volume * (
+            execution_price - order.price if order.order_type == "sell" else order.price - execution_price
+        )
+        print(
+            f"Executed {order.order_type} order at {execution_price} for {order.volume} units. New balance: {self.balance}, Profit: {self.profit}"
+        )
 
     def get_order_history(self):
         return self.order_history
 
     def get_balance(self):
         return self.balance
+
+    def get_profit(self):
+        return self.profit
+
+    def initialize_grid(self, base_price, num_orders, volume):
+        self.clear_orders()
+        for i in range(1, num_orders + 1):
+            buy_price = base_price - (base_price * self.grid_step_percent / 100) * i
+            sell_price = base_price + (base_price * self.grid_step_percent / 100) * i
+            self.place_order("buy", buy_price, volume)
+            self.place_order("sell", sell_price, volume)
+
+    def clear_orders(self):
+        self.orders = []
+        print("Cleared all existing orders")
