@@ -85,7 +85,8 @@ class TradingSimulator:
             base_price = self.ema[-1]
             num_orders = 10  # Количество ордеров в каждом направлении
             volume = 1  # Объем каждого ордера
-            self.order_manager.initialize_grid(self.ema, num_orders, volume)
+            commission_rate = 0.0067  # Можно изменить или получить из настроек
+            self.order_manager.initialize_grid(self.ema, num_orders, volume, commission_rate)
 
     def update_report(self):
         balance = self.order_manager.get_balance()

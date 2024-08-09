@@ -1,15 +1,17 @@
 import uuid
 
+
 class Order:
-    def __init__(self, order_type, price, volume):
-        self.id = str(uuid.uuid4())[:8]  # Генерируем уникальный ID
+    def __init__(self, order_type, price, volume, commission_rate):
+        self.id = str(uuid.uuid4())[:8]
         self.order_type = order_type
         self.price = price
         self.volume = volume
         self.executed = False
         self.execution_price = None
-        self.profit = 0  # Добавляем атрибут для хранения прибыли
-        self.commission = 0  # Добавляем атрибут для хранения комиссии
+        self.profit = 0
+        self.commission_rate = commission_rate
+        self.commission = 0  # Будет рассчитано при исполнении ордера
 
 
 class OrderManager:
@@ -26,12 +28,14 @@ class OrderManager:
 
     def place_order(self, order_type, price, volume):
         required_margin = price * volume
-        commission = price * volume * self.commission_rate
-        if price > 0 and self.free_margin >= required_margin + commission:
-            order = Order(order_type, price, volume)
-            self.orders.append(order)  # Добавляем ордер в список
-            self.free_margin -= required_margin + commission
-            print(f"Placed {order_type} order at {price} for {volume} units.")
+        estimated_commission = price * volume * self.commission_rate
+        if price > 0 and self.free_margin >= required_margin + estimated_commission:
+            order = Order(order_type, price, volume, self.commission_rate)
+            self.orders.append(order)
+            self.free_margin -= required_margin + estimated_commission
+            print(
+                f"Placed {order_type} order at {price} for {volume} units. Estimated commission: {estimated_commission:.8f}"
+            )
         else:
             print(f"Insufficient margin to place {order_type} order at {price} for {volume} units.")
 
@@ -48,37 +52,33 @@ class OrderManager:
     def execute_order(self, order, execution_price):
         order.executed = True
         order.execution_price = execution_price
-        self.executed_orders.append(order)
-        self.orders.remove(order)  # Удаляем исполненный ордер из списка активных ордеровактивных ордеров
-        commission = order.volume * execution_price * self.commission_rate
+        order.commission = order.volume * execution_price * order.commission_rate
 
         if order.order_type == "buy":
-            self.balance -= order.volume * execution_price + commission
+            self.balance -= order.volume * execution_price + order.commission
             new_price = order.price * (1 + self.grid_step_percent / 100)
             self.place_order("sell", new_price, order.volume)
         elif order.order_type == "sell":
-            self.balance += order.volume * execution_price - commission
+            self.balance += order.volume * execution_price - order.commission
             new_price = order.price * (1 - self.grid_step_percent / 100)
             self.place_order("buy", new_price, order.volume)
 
         order.profit = (
             order.volume
             * (execution_price - order.price if order.order_type == "sell" else order.price - execution_price)
-            - commission
-        )
+        ) - order.commission
         self.profit += order.profit
+        self.executed_orders.append(order)
+        self.orders.remove(order)
         self.order_history.append(order)
         self.update_free_margin_after_execution()
         print(
-            f"Executed {order.order_type} order at {execution_price} for {order.volume} units. Commission: {commission}, New balance: {self.balance}, Profit: {self.profit}, Free Margin: {self.free_margin}"
+            f"Executed {order.order_type} order at {execution_price} for {order.volume} units. Commission: {order.commission:.8f}, Profit: {order.profit:.8f}, New balance: {self.balance:.8f}, Total Profit: {self.profit:.8f}, Free Margin: {self.free_margin:.8f}"
         )
+
     def calculate_total_commission(self):
-        total_commission = 0
-        for order in self.orders:
-            if order.executed:
-                total_commission += order.volume * order.execution_price * self.commission_rate
-            else:
-                total_commission += order.volume * order.price * self.commission_rate
+        total_commission = sum(order.commission for order in self.executed_orders)
+        total_commission += sum(order.volume * order.price * order.commission_rate for order in self.orders if not order.executed)
         return total_commission
 
     def calculate_floating_profit(self, current_price):
@@ -127,7 +127,9 @@ class OrderManager:
     def get_free_margin(self):
         return self.free_margin
 
-    def initialize_grid(self, ema, num_orders, volume):
+    def initialize_grid(self, ema, num_orders, volume, commission_rate=None):
+        if commission_rate is not None:
+            self.commission_rate = commission_rate
         self.clear_orders()
         current_price = ema[-1]
         for i in range(num_orders):
