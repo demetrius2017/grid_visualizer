@@ -21,6 +21,7 @@ class OrderManager:
         initial_balance,
         commission_rate,
         grid_size,
+        graph,
         grid_step_percent=1.0,
         min_grid_coverage=0.3,
         min_orders=20,
@@ -43,6 +44,7 @@ class OrderManager:
         self.current_ema = None  # Хранение текущего значения EMA
         self.current_price = None  # Хранение текущей цены
         self.price_history = []  # Хранение истории цен
+        self.graph = graph
 
     def calculate_grid_boundaries(self, ema, price_history):
         hist_min = np.min(price_history)
@@ -159,7 +161,9 @@ class OrderManager:
             volume *= self.free_margin / total_margin_required
 
         self.place_grid_orders(buy_prices, sell_prices, volume)
+        
         print(f"Orders placed. Total Orders: {len(self.orders)}")
+        self.graph.update_orders(self.orders)
 
     def update_existing_orders(self, ema, current_price):
         for order in self.orders:
@@ -191,25 +195,27 @@ class OrderManager:
         last_price = self.price_history[-2] if len(self.price_history) > 1 else self.current_price
         price_range = sorted([last_price, current_price])
 
-        orders_to_execute = []
-        for order in self.orders[:]:  # Используем копию списка, чтобы избежать проблем при удалении элементов
-            print(f"Order ID: {order.id}, Type: {order.order_type}, Price: {order.price}, Executed: {order.executed}")
+        orders_executed = False
+        for order in self.orders[:]:  # Используем копию списка
             if not order.executed:
-                if order.order_type == "buy" and price_range[0] <= order.price <= price_range[1]:
-                    orders_to_execute.append(order)
-                elif order.order_type == "sell" and price_range[0] <= order.price <= price_range[1]:
-                    orders_to_execute.append(order)
+                if (order.order_type == "buy" and price_range[0] <= order.price <= price_range[1]) or \
+                   (order.order_type == "sell" and price_range[0] <= order.price <= price_range[1]):
+                    print(f"Executing order: {order.id}")
+                    self.execute_order(order, order.price)
+                    orders_executed = True
 
-        # Сортируем ордера для исполнения
-        orders_to_execute.sort(key=lambda x: x.price, reverse=(current_price > last_price))
-
-        for order in orders_to_execute:
-            print(f"Executing order: {order.id}")
-            self.execute_order(order, order.price)  # Исполняем по цене открытия ордера
+        if orders_executed:
+            # Обновляем отображение сетки после выполнения ордеров, но до обновления самой сетки
+            self.update_display()
 
         # После проверки всех ордеров, обновляем сетку
-        if self.current_ema is not None:
+        if (orders_executed or not self.orders) and self.current_ema is not None:
             self.update_grid(self.current_ema, current_price, self.price_history)
+
+    def update_display(self):
+        # Этот метод будет вызывать обновление графика
+        # Его реализацию нужно добавить в TradingSimulator
+        pass
 
     def execute_order(self, order, execution_price):
         print(f"Executing order {order.id} at price {execution_price}")

@@ -24,6 +24,7 @@ class TradingSimulator:
             initial_balance,
            commission_rate,
            grid_size,
+           graph,
            min_grid_coverage=min_grid_coverage,
            min_orders=min_orders,
            max_orders=max_orders,
@@ -88,6 +89,7 @@ class TradingSimulator:
 
         # Проверка и исполнение ордеров
         self.order_manager.check_orders(new_price)
+        # self.graph.update_orders(self.order_manager.orders)
 
         # Обновление таблицы исполненных ордеров и отчетов
         executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
@@ -153,3 +155,6 @@ class TradingSimulator:
         self.order_manager.clear_orders()
         self.graph.clear_graph()
         print("Simulation cleared and reset")
+
+    def update_orders_display(self):
+        self.graph.update_orders(self.order_manager.orders)
