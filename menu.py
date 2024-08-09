@@ -19,7 +19,7 @@ class GridSettingsDialog(QtWidgets.QDialog):
 
         self.volatility_label = QtWidgets.QLabel("Volatility:")
         self.volatility_input = QtWidgets.QLineEdit()
-        self.volatility_input.setValidator(QtGui.QDoubleValidator(0.001, 1.0, 3))
+        self.volatility_input.setValidator(QtGui.QDoubleValidator(0.0001, 1.0, 3))
         layout.addWidget(self.volatility_label)
         layout.addWidget(self.volatility_input)
 

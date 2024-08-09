@@ -49,6 +49,9 @@ class OrderManager:
         hist_max = np.max(price_history)
         current_price = price_history[-1]
 
+        # Рассчитываем минимальный шаг сетки
+        min_step = current_price * (self.grid_step_percent / 100)
+
         # Рассчитываем расстояние от текущей цены до исторического максимума и минимума
         distance_to_max = (hist_max - current_price) / current_price
         distance_to_min = (current_price - hist_min) / current_price
@@ -61,11 +64,9 @@ class OrderManager:
         upper_bound = min(upper_bound, hist_max)
         lower_bound = max(lower_bound, hist_min)
 
-        # Убедимся, что текущая цена находится между границами
-        if current_price > upper_bound:
-            upper_bound = current_price
-        if current_price < lower_bound:
-            lower_bound = current_price
+        # Убедимся, что границы достаточно далеки от текущей цены
+        upper_bound = max(upper_bound, current_price + min_step * self.min_orders)
+        lower_bound = min(lower_bound, current_price - min_step * self.min_orders)
 
         print(f"Grid boundaries: Lower = {lower_bound}, Upper = {upper_bound}")
         return lower_bound, upper_bound
@@ -123,13 +124,24 @@ class OrderManager:
         print(f"Updating grid with EMA={ema}, Current Price={current_price}")
         lower_bound, upper_bound = self.calculate_grid_boundaries(ema, price_history)
 
+        # Рассчитываем минимальный шаг сетки на основе заданного процента
+        min_step = current_price * (self.grid_step_percent / 100)
+
         # Рассчитываем количество ордеров для каждой стороны
         total_orders = min(max(int(self.grid_size), self.min_orders * 2), self.max_orders * 2)
-        buy_orders = sell_orders = total_orders // 2
+        max_orders_per_side = (upper_bound - lower_bound) / min_step / 2
+
+        if max_orders_per_side < self.min_orders:
+            print(f"Warning: Grid range too small for minimum number of orders. Adjusting boundaries.")
+            range_extension = (self.min_orders * min_step * 2 - (upper_bound - lower_bound)) / 2
+            lower_bound -= range_extension
+            upper_bound += range_extension
+
+        buy_orders = sell_orders = min(int(max_orders_per_side), total_orders // 2)
 
         # Генерируем цены для покупки и продажи
-        buy_prices = np.linspace(lower_bound, current_price, buy_orders + 1)[:-1]  # Исключаем текущую цену
-        sell_prices = np.linspace(current_price, upper_bound, sell_orders + 1)[1:]  # Исключаем текущую цену
+        buy_prices = np.arange(current_price - min_step, lower_bound - min_step, -min_step)[:buy_orders]
+        sell_prices = np.arange(current_price + min_step, upper_bound + min_step, min_step)[:sell_orders]
 
         print(f"Calculated buy prices: {buy_prices}")
         print(f"Calculated sell prices: {sell_prices}")
