@@ -69,7 +69,18 @@ class MarketGraph(QtWidgets.QWidget):
             f"Balance: {balance}, Profit: {profit}, Floating Profit: {floating_profit}, Free Margin: {free_margin}"
         )
 
+    def update_orders_table(self, orders):
+        self.orders_table.setRowCount(len(orders))
+        for i, order in enumerate(orders):
+            self.orders_table.setItem(i, 0, QtWidgets.QTableWidgetItem(str(order.id)))
+            self.orders_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{order.price:.8f}"))
+            self.orders_table.setItem(i, 2, QtWidgets.QTableWidgetItem(order.order_type))
+            self.orders_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{order.commission:.8f}"))
+            self.orders_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{order.volume:.8f}"))
+            self.orders_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{order.profit:.8f}"))
+
     def update_balance_graph(self, balance_history, free_margin_history, margin_history):
-        self.balance_curve.setData(range(len(balance_history)), balance_history)
-        self.free_margin_curve.setData(range(len(free_margin_history)), free_margin_history)
-        self.margin_curve.setData(range(len(margin_history)), margin_history)
+        if balance_history and free_margin_history and margin_history:
+            self.balance_curve.setData(range(len(balance_history)), balance_history)
+            self.free_margin_curve.setData(range(len(free_margin_history)), free_margin_history)
+            self.margin_curve.setData(range(len(margin_history)), margin_history)
