@@ -45,7 +45,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.simulator = TradingSimulator(self.graph)
 
         self.init_menu()
+        self.init_toolbar()
         self.show()
+
+    def init_toolbar(self):
+        toolbar = self.addToolBar("Controls")
+
+        clear_action = QtWidgets.QAction("Clear", self)
+        clear_action.triggered.connect(self.clear_simulation)
+        toolbar.addAction(clear_action)
+
+    def clear_simulation(self):
+        self.simulator.clear()
+        print("Simulation cleared")
 
     def init_menu(self):
         menubar = self.menuBar()

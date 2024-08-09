@@ -4,13 +4,30 @@ from orders import OrderManager
 
 
 class TradingSimulator:
-    def __init__(self, graph, initial_balance=10000, commission_rate=0.001, grid_size=10, ema_period=20):
+    def __init__(
+        self,
+       graph,
+       initial_balance=10000,
+       commission_rate=0.001,
+       grid_size=10,
+       ema_period=20,
+       min_grid_coverage=0.3,
+       min_orders=20,
+       max_orders=50,
+    ):
         self.graph = graph
         self.current_price = 0.5
-        self.volatility = 0.05  # Устанавливаем значение по умолчанию
+        self.volatility = 0.005  # Устанавливаем значение по умолчанию
         self.stop_simulation = True
-        self.grid_size = 1.00  # Grid size in percentage
-        self.order_manager = OrderManager(initial_balance, commission_rate, grid_size)
+        self.grid_size = grid_size
+        self.order_manager = OrderManager(
+            initial_balance,
+           commission_rate,
+           grid_size,
+           min_grid_coverage=min_grid_coverage,
+           min_orders=min_orders,
+           max_orders=max_orders,
+        )
         self.ema_period = ema_period
         self.prices = []  # To store historical prices
         self.ema = []  # To store EMA values
@@ -45,6 +62,10 @@ class TradingSimulator:
         new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
         self.prices.append(new_price)
 
+        if len(self.ema) > len(self.prices):
+            print("Warning: EMA length exceeds price data length. Truncating EMA.")
+            self.ema = self.ema[-len(self.prices) :]
+
         if len(self.prices) >= self.ema_period:
             if len(self.ema) == 0:
                 self.ema.append(np.mean(self.prices[-self.ema_period :]))
@@ -52,30 +73,27 @@ class TradingSimulator:
                 k = 2 / (self.ema_period + 1)
                 new_ema = new_price * k + self.ema[-1] * (1 - k)
                 self.ema.append(new_ema)
-
-            self.order_manager.current_ema = self.ema[-1]
-            self.order_manager.current_price = new_price
-            self.order_manager.price_history = self.prices
-
-            # Проверяем, нужно ли инициализировать сетку
-            if len(self.order_manager.orders) == 0 and len(self.ema) > 0:  # Исправленное условие
-                print("No open orders. Initializing grid.")
-                self.initialize_grid()
-
-            # Обновляем отображение открытых ордеров
-            self.graph.update_orders(self.order_manager.orders)
-
-            # Обновляем отображение истории исполненных ордеров
-            self.graph.update_order_history(self.order_manager.get_order_history())
-
-            executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
-            self.graph.update_orders_table(executed_orders)
-            self.update_balances()
-            self.update_report()
         else:
-            self.graph.update_graph(self.prices)
+            self.ema.append(new_price)  # EMA равна цене, пока не накоплено достаточно данных
+
+        self.order_manager.current_ema = self.ema[-1]
+        self.order_manager.current_price = new_price
+        self.order_manager.price_history = self.prices
 
         self.current_price = new_price
+
+        # Обновление графика
+        self.graph.update_graph(self.prices)
+        self.graph.update_ema(self.ema)
+
+        # Проверка и исполнение ордеров
+        self.order_manager.check_orders(new_price)
+
+        # Обновление таблицы исполненных ордеров и отчетов
+        executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
+        self.graph.update_orders_table(executed_orders)
+        self.update_balances()
+        self.update_report()
 
     def update_balances(self):
         self.balance_history.append(self.order_manager.get_balance())
@@ -124,3 +142,14 @@ class TradingSimulator:
             if modifiers == QtCore.Qt.ShiftModifier:
                 self.current_price = max(0, cursor_position + np.random.uniform(-self.volatility, self.volatility))
                 print(f"Mouse moved: new current price={self.current_price}")
+
+    def clear(self):
+        self.current_price = 0.5  # или другое начальное значение
+        self.prices = []
+        self.ema = []
+        self.balance_history = []
+        self.free_margin_history = []
+        self.margin_history = []
+        self.order_manager.clear_orders()
+        self.graph.clear_graph()
+        print("Simulation cleared and reset")
