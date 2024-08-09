@@ -47,7 +47,7 @@ class TradingSimulator:
 
         if len(self.prices) >= self.ema_period:
             if len(self.ema) == 0:
-                self.ema.append(np.mean(self.prices[-self.ema_period:]))
+                self.ema.append(np.mean(self.prices[-self.ema_period :]))
             else:
                 k = 2 / (self.ema_period + 1)
                 new_ema = new_price * k + self.ema[-1] * (1 - k)
@@ -62,9 +62,12 @@ class TradingSimulator:
                 print("No open orders. Initializing grid.")
                 self.initialize_grid()
 
-            self.graph.update_graph(self.prices)
-            self.graph.update_ema(self.ema)
-            self.order_manager.check_orders(new_price)
+            # Обновляем отображение открытых ордеров
+            self.graph.update_orders(self.order_manager.orders)
+
+            # Обновляем отображение истории исполненных ордеров
+            self.graph.update_order_history(self.order_manager.get_order_history())
+
             executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
             self.graph.update_orders_table(executed_orders)
             self.update_balances()

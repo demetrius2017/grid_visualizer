@@ -30,9 +30,9 @@ class MarketGraph(QtWidgets.QWidget):
 
         self.price_curve = self.graphWidget.plot(pen=pg.mkPen("y", width=1))
         self.ema_curve = self.graphWidget.plot(pen=pg.mkPen("b", width=1))
-        self.buy_orders_curve = pg.ScatterPlotItem(pen=pg.mkPen("g"), brush=pg.mkBrush(0, 255, 0, 120), size=10)
-        self.sell_orders_curve = pg.ScatterPlotItem(pen=pg.mkPen("r"), brush=pg.mkBrush(255, 0, 0, 120), size=10)
-        self.order_history_curve = pg.ScatterPlotItem(pen=pg.mkPen("gray"), brush=pg.mkBrush(128, 128, 128, 50), size=5)
+        self.buy_orders_curve = pg.ScatterPlotItem(pen=pg.mkPen('g'), brush=pg.mkBrush(0, 255, 0, 120), symbol='t1', size=10)
+        self.sell_orders_curve = pg.ScatterPlotItem(pen=pg.mkPen('r'), brush=pg.mkBrush(255, 0, 0, 120), symbol='t', size=10)
+        self.order_history_curve = pg.ScatterPlotItem(pen=pg.mkPen(None), symbol='o', size=5)
         self.graphWidget.addItem(self.buy_orders_curve)
         self.graphWidget.addItem(self.sell_orders_curve)
         self.graphWidget.addItem(self.order_history_curve)
@@ -50,18 +50,31 @@ class MarketGraph(QtWidgets.QWidget):
         self.price_curve.setData(range(len(price_data)), price_data)
 
     def update_ema(self, ema_data):
-        self.ema_curve.setData(range(len(ema_data)), ema_data)
+        if ema_data:
+            self.ema_curve.setData(range(len(ema_data)), ema_data)
+            self.ema_curve.show()  # Убедимся, что кривая видима
+        else:
+            print("No EMA data to display")
 
-    def update_orders(self, buy_orders, sell_orders):
-        buy_spots = [{"pos": (len(self.price_curve.getData()[0]) - 1, price), "data": 1} for price in buy_orders]
-        sell_spots = [{"pos": (len(self.price_curve.getData()[0]) - 1, price), "data": 1} for price in sell_orders]
+    def update_orders(self, orders):
+        buy_spots = []
+        sell_spots = []
+        for order in orders:
+            if not order.executed:
+                spot = {"pos": (len(self.price_curve.getData()[0]) - 1, order.price), "data": 1}
+                if order.order_type == "buy":
+                    buy_spots.append(spot)
+                else:
+                    sell_spots.append(spot)
         self.buy_orders_curve.setData(buy_spots)
         self.sell_orders_curve.setData(sell_spots)
 
     def update_order_history(self, order_history):
-        history_spots = [
-            {"pos": (i, order.price), "data": 1} for i, order in enumerate(order_history) if not order.executed
-        ]
+        history_spots = []
+        for i, order in enumerate(order_history):
+            if order.executed:
+                spot = {"pos": (i, order.execution_price), "data": 1, "brush": pg.mkBrush('g') if order.order_type == "buy" else pg.mkBrush('r')}
+                history_spots.append(spot)
         self.order_history_curve.setData(history_spots)
 
     def update_report(self, balance, profit, floating_profit, free_margin):

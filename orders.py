@@ -37,6 +37,17 @@ class OrderManager:
         range_size = hist_max - hist_min
         lower_bound = max(ema - range_size * coverage_percent, hist_min)
         upper_bound = min(ema + range_size * coverage_percent, hist_max)
+        
+        # Убедимся, что границы находятся на некотором расстоянии от текущей цены
+        current_price = price_history[-1]
+        min_distance = range_size * 0.05  # Минимальное расстояние - 5% от диапазона цен
+        
+        if current_price - lower_bound < min_distance:
+            lower_bound = current_price - min_distance
+        
+        if upper_bound - current_price < min_distance:
+            upper_bound = current_price + min_distance
+        
         return lower_bound, upper_bound
 
     def place_order(self, order_type, price, volume):
@@ -83,54 +94,100 @@ class OrderManager:
             print(
                 f"Placed {order_type} order at {price} for {volume} units. Estimated commission: {estimated_commission:.8f}"
             )
+            return True
         else:
             print(f"Insufficient margin to place {order_type} order at {price} for {volume} units.")
+            return False
 
     def update_grid(self, ema, current_price, price_history):
         print(f"Updating grid with EMA={ema}, Current Price={current_price}")
+        lower_bound, upper_bound = self.calculate_grid_boundaries(ema, price_history)
 
-        if len(self.orders) == 0:
-            lower_bound, upper_bound = self.calculate_grid_boundaries(ema, price_history)
-            buy_prices, sell_prices = self.create_asymmetric_grid(ema, current_price, lower_bound, upper_bound)
-            print(f"Calculated buy prices: {buy_prices}, sell prices: {sell_prices}")
+        # Рассчитываем шаг сетки
+        grid_step = (upper_bound - lower_bound) / (self.grid_size * 2)
 
-            volume = self.calculate_order_volume(current_price)
-            self.place_grid_orders(buy_prices, sell_prices, volume)
-            print(f"New grid created. Total Orders: {len(self.orders)}")
-        else:
-            print("Grid update skipped. There are existing open orders.")
+        # Генерируем цены для покупки и продажи
+        all_prices = np.linspace(lower_bound, upper_bound, self.grid_size * 2)
 
-        self.update_existing_orders(ema, current_price)
+        # Разделяем цены на buy и sell в зависимости от текущей цены
+        buy_prices = [price for price in all_prices if price < current_price]
+        sell_prices = [price for price in all_prices if price > current_price]
 
-    def update_existing_orders(self, ema, current_price):
-        for order in self.orders:
-            if not order.executed:
-                if order.order_type == "buy" and order.price > current_price:
-                    new_price = min(order.price, ema * (1 - self.grid_step_percent / 100))
-                    order.price = new_price
-                    print(f"Updated buy order {order.id} price to {new_price}")
-                elif order.order_type == "sell" and order.price < current_price:
-                    new_price = max(order.price, ema * (1 + self.grid_step_percent / 100))
-                    order.price = new_price
-                    print(f"Updated sell order {order.id} price to {new_price}")
+        # Проверяем, есть ли у нас достаточно уровней для buy и sell
+        if len(buy_prices) < self.grid_size / 2:
+            additional_buy_levels = self.grid_size // 2 - len(buy_prices)
+            for i in range(additional_buy_levels):
+                new_price = max(lower_bound, current_price - (i + 1) * grid_step)
+                buy_prices.append(new_price)
+
+        if len(sell_prices) < self.grid_size / 2:
+            additional_sell_levels = self.grid_size // 2 - len(sell_prices)
+            for i in range(additional_sell_levels):
+                new_price = min(upper_bound, current_price + (i + 1) * grid_step)
+                sell_prices.append(new_price)
+
+        # Сортируем цены
+        buy_prices.sort(reverse=True)
+        sell_prices.sort()
+
+        print(f"Calculated buy prices: {buy_prices}")
+        print(f"Calculated sell prices: {sell_prices}")
+
+        # Удалим существующие неисполненные ордера
+        self.orders = [order for order in self.orders if order.executed]
+
+        volume = self.calculate_order_volume(current_price)
+
+        total_margin_required = sum([price * volume for price in buy_prices + sell_prices])
+        if total_margin_required > self.free_margin:
+            print(f"Warning: Not enough free margin to place all orders. Adjusting volume.")
+            volume *= self.free_margin / total_margin_required
+
+        self.place_grid_orders(buy_prices, sell_prices, volume)
+        print(f"Orders placed. Total Orders: {len(self.orders)}")
+
+        def update_existing_orders(self, ema, current_price):
+            for order in self.orders:
+                if not order.executed:
+                    if order.order_type == "buy" and order.price > current_price:
+                        new_price = min(order.price, ema * (1 - self.grid_step_percent / 100))
+                        order.price = new_price
+                        print(f"Updated buy order {order.id} price to {new_price}")
+                    elif order.order_type == "sell" and order.price < current_price:
+                        new_price = max(order.price, ema * (1 + self.grid_step_percent / 100))
+                        order.price = new_price
+                        print(f"Updated sell order {order.id} price to {new_price}")
 
     def calculate_order_volume(self, current_price):
-        # Расчет объема ордера на основе свободной маржи и текущей цены
-        return self.free_margin * 0.1 / current_price  # Используем 10% свободной маржи для каждого ордера
+        # Рассчитываем общий объем для всей сетки
+        total_volume = self.free_margin * 0.5 / current_price  # Используем 50% свободной маржи для всей сетки
+
+        # Делим общий объем на количество уровней сетки
+        volume_per_level = total_volume / (self.grid_size * 2)  # Умножаем на 2, так как у нас buy и sell ордера
+
+        return volume_per_level
 
     def check_orders(self, current_price):
         self.current_price = current_price
         self.calculate_floating_profit(current_price)
         self.calculate_free_margin()
         print(f"Checking orders at current price: {current_price}")
-        for order in self.orders:
-            print(f"Order ID: {order.id}, Type: {order.order_type}, Price: {order.price}, Executed: {order.executed}")
+        for order in self.orders[:]:  # Используем копию списка, чтобы избежать проблем при удалении элементов
             if not order.executed:
                 if (order.order_type == "buy" and current_price <= order.price) or (
                     order.order_type == "sell" and current_price >= order.price
                 ):
                     print(f"Executing order: {order.id}")
                     self.execute_order(order, current_price)
+                elif (order.order_type == "buy" and current_price > order.price) or (
+                    order.order_type == "sell" and current_price < order.price
+                ):
+                    print(f"Removing invalid order: {order.id}")
+                    self.orders.remove(order)
+
+        # После проверки всех ордеров, обновляем сетку
+        if self.current_ema is not None:
+            self.update_grid(self.current_ema, current_price, self.price_history)
 
     def execute_order(self, order, execution_price):
         print(f"Executing order {order.id} at price {execution_price}")
@@ -247,14 +304,9 @@ class OrderManager:
         print("Cleared all orders")
 
     def place_grid_orders(self, buy_prices, sell_prices, volume):
-        """
-        Размещает ордера по рассчитанным уровням цен для покупки и продажи.
-        :param buy_prices: Список цен для покупки.
-        :param sell_prices: Список цен для продажи.
-        :param volume: Объем ордеров.
-        """
         for price in buy_prices:
-            self.place_order("buy", price, volume)
-
+            if not self.place_order("buy", price, volume):
+                break
         for price in sell_prices:
-            self.place_order("sell", price, volume)
+            if not self.place_order("sell", price, volume):
+                break
