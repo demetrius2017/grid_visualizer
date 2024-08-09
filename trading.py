@@ -17,7 +17,7 @@ class TradingSimulator:
     ):
         self.graph = graph
         self.current_price = 0.5
-        self.volatility = 0.05  # Устанавливаем значение по умолчанию
+        self.volatility = 0.005  # Устанавливаем значение по умолчанию
         self.stop_simulation = True
         self.grid_size = grid_size
         self.order_manager = OrderManager(
