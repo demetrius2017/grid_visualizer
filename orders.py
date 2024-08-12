@@ -75,6 +75,46 @@ class OrderManager:
         self.graph = graph
         self.positions = []
         self.closed_positions = []
+        self.executed_orders_history = []
+        self.price_distribution = []
+        self.distribution_period = 100  # Количество последних ордеров для анализа
+        self.volume_growth_factor = 1.2  # Коэффициент роста объема ордеров
+        self.price_frequency = {}
+
+    def update_price_distribution(self, price):
+        self.price_distribution.append(price)
+        if len(self.price_distribution) > self.distribution_period:
+            self.price_distribution.pop(0)
+
+        # Обновляем частоту цен
+        price_bin = round(price, 2)  # Округляем до двух знаков после запятой
+        self.price_frequency[price_bin] = self.price_frequency.get(price_bin, 0) + 1
+
+    def calculate_distribution_coefficient(self):
+        if len(self.executed_orders_history) < self.distribution_period:
+            return 1.0  # Возвращаем нейтральный коэффициент, если недостаточно данных
+
+        recent_orders = self.executed_orders_history[-self.distribution_period :]
+        buy_count = sum(1 for order in recent_orders if order.order_type == "buy")
+        sell_count = len(recent_orders) - buy_count
+
+        if sell_count == 0:
+            return 2.0  # Максимальный коэффициент в пользу покупок
+        return buy_count / sell_count
+
+    def calculate_price_frequency_coefficient(self, price):
+        if not self.price_frequency:
+            return 1.0
+
+        price_bin = round(price, 2)
+        frequency = self.price_frequency.get(price_bin, 0)
+        max_frequency = max(self.price_frequency.values())
+
+        if max_frequency == 0:
+            return 1.0
+
+        # Инвертируем коэффициент, чтобы редкие цены получали больший объем
+        return 1 + (1 - frequency / max_frequency)
 
     def calculate_grid_boundaries(self, ema, price_history):
         hist_min = np.min(price_history)
@@ -104,6 +144,15 @@ class OrderManager:
         return lower_bound, upper_bound
 
     def place_order(self, order_type, price, volume):
+
+        base_volume = volume
+        distribution_coeff = self.calculate_distribution_coefficient()
+        frequency_coeff = self.calculate_price_frequency_coefficient(price)
+
+        if order_type == "buy":
+            volume = base_volume * distribution_coeff * frequency_coeff
+        else:  # sell
+            volume = base_volume * (2 - distribution_coeff) * frequency_coeff
         required_margin = price * volume
         estimated_commission = price * volume * self.commission_rate
         if price > 0 and self.free_margin >= required_margin + estimated_commission:
@@ -179,11 +228,17 @@ class OrderManager:
         buy_orders = sell_orders = min(int(max_orders_per_side), total_orders // 2)
 
         # Генерируем цены для покупки и продажи
-        buy_prices = np.arange(current_price - min_step, lower_bound - min_step, -min_step)[:buy_orders]
-        sell_prices = np.arange(current_price + min_step, upper_bound + min_step, min_step)[:sell_orders]
+        buy_prices, sell_prices = self.create_asymmetric_grid(ema, current_price, lower_bound, upper_bound)
 
-        print(f"Calculated buy prices: {buy_prices}")
-        print(f"Calculated sell prices: {sell_prices}")
+        base_volume = self.calculate_base_volume(current_price)
+
+        for i, price in enumerate(buy_prices):
+            volume = base_volume * (self.volume_growth_factor**i)
+            self.place_order("buy", price, volume)
+
+        for i, price in enumerate(sell_prices):
+            volume = base_volume * (self.volume_growth_factor**i)
+            self.place_order("sell", price, volume)
 
         # Удалим существующие неисполненные ордера
         self.orders = [order for order in self.orders if order.executed]
@@ -214,6 +269,9 @@ class OrderManager:
                     order.price = new_price
                     print(f"Updated sell order {order.id} price to {new_price}")
 
+    def calculate_base_volume(self, current_price):
+        return self.free_margin * 0.01 / current_price  # Используем 1% свободной маржи для базового объема
+
     def calculate_order_volume(self, current_price):
         # Рассчитываем общий объем для всей сетки
         total_volume = self.free_margin * 0.5 / current_price  # Используем 50% свободной маржи для всей сетки
@@ -227,6 +285,7 @@ class OrderManager:
         self.current_price = current_price
         self.calculate_floating_profit(current_price)
         self.calculate_free_margin()
+        self.update_price_distribution(current_price)
         print(f"Checking orders at current price: {current_price}")
 
         last_price = self.price_history[-2] if len(self.price_history) > 1 else self.current_price
@@ -305,7 +364,11 @@ class OrderManager:
         )
         self.place_order("sell" if order.order_type == "buy" else "buy", new_price, order.volume)
 
-        self.executed_orders.append(order)
+        self.executed_orders_history.append(order)
+        if len(self.executed_orders_history) > self.distribution_period * 2:
+            self.executed_orders_history.pop(0)
+
+        self.update_price_distribution(execution_price)
         self.orders.remove(order)
         if order not in self.order_history:
             self.order_history.append(order)
