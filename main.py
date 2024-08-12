@@ -4,6 +4,7 @@ from graph import MarketGraph
 from trading import TradingSimulator
 from menu import MainWindow
 
+
 def main():
     app = QtWidgets.QApplication([])
 

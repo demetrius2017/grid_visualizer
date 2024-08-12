@@ -2,7 +2,6 @@ from PyQt5 import QtWidgets, QtGui
 from graph import MarketGraph
 from trading import TradingSimulator
 
-
 class GridSettingsDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)

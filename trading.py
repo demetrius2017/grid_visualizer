@@ -1,19 +1,20 @@
 import numpy as np
 from PyQt5 import QtCore, QtGui
 from orders import OrderManager
+from positions_window import PositionsWindow
 
 
 class TradingSimulator:
     def __init__(
         self,
-       graph,
-       initial_balance=10000,
-       commission_rate=0.001,
-       grid_size=10,
-       ema_period=20,
-       min_grid_coverage=0.3,
-       min_orders=20,
-       max_orders=50,
+        graph,
+        initial_balance=10000,
+        commission_rate=0.001,
+        grid_size=10,
+        ema_period=20,
+        min_grid_coverage=0.3,
+        min_orders=20,
+        max_orders=50,
     ):
         self.graph = graph
         self.current_price = 0.5
@@ -22,12 +23,12 @@ class TradingSimulator:
         self.grid_size = grid_size
         self.order_manager = OrderManager(
             initial_balance,
-           commission_rate,
-           grid_size,
-           graph,
-           min_grid_coverage=min_grid_coverage,
-           min_orders=min_orders,
-           max_orders=max_orders,
+            commission_rate,
+            grid_size,
+            graph,
+            min_grid_coverage=min_grid_coverage,
+            min_orders=min_orders,
+            max_orders=max_orders,
         )
         self.ema_period = ema_period
         self.prices = []  # To store historical prices
@@ -35,6 +36,7 @@ class TradingSimulator:
         self.balance_history = []
         self.free_margin_history = []
         self.margin_history = []
+        self.positions_window = None
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update)
@@ -75,7 +77,7 @@ class TradingSimulator:
                 new_ema = new_price * k + self.ema[-1] * (1 - k)
                 self.ema.append(new_ema)
         else:
-            self.ema.append(new_price)  # EMA равна цене, пока не накоплено достаточно данных
+            self.ema.append(new_price)
 
         self.order_manager.current_ema = self.ema[-1]
         self.order_manager.current_price = new_price
@@ -89,13 +91,32 @@ class TradingSimulator:
 
         # Проверка и исполнение ордеров
         self.order_manager.check_orders(new_price)
-        # self.graph.update_orders(self.order_manager.orders)
 
         # Обновление таблицы исполненных ордеров и отчетов
         executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
         self.graph.update_orders_table(executed_orders)
+        current_time = len(self.prices) - 1
+        buy_orders = [order for order in self.order_manager.orders if order.order_type == "buy" and not order.executed]
+        sell_orders = [
+            order for order in self.order_manager.orders if order.order_type == "sell" and not order.executed
+        ]
+        self.graph.update_order_book(buy_orders, sell_orders, current_time)
+
         self.update_balances()
         self.update_report()
+
+        # Обновление графика открытых позиций
+        self.update_positions_window()
+
+    def update_positions_window(self):
+        if self.positions_window is None:
+            self.positions_window = PositionsWindow()
+            self.positions_window.show()
+
+        open_positions = self.order_manager.get_open_positions()
+        closed_positions = self.order_manager.get_closed_positions()
+        current_price = self.current_price
+        self.positions_window.update_positions(open_positions, closed_positions, current_price)
 
     def update_balances(self):
         self.balance_history.append(self.order_manager.get_balance())
@@ -155,6 +176,8 @@ class TradingSimulator:
         self.order_manager.clear_orders()
         self.graph.clear_graph()
         print("Simulation cleared and reset")
+        if self.positions_window:
+            self.positions_window.clear()
 
     def update_orders_display(self):
         self.graph.update_orders(self.order_manager.orders)

@@ -2,6 +2,32 @@ import uuid
 import numpy as np
 
 
+class Position:
+    def __init__(self, order_type, price, volume):
+        self.order_type = order_type
+        self.entry_price = price
+        self.volume = volume
+        self.floating_profit = 0
+        self.closed = False
+        self.exit_price = None
+        self.profit = 0
+
+    def update_floating_profit(self, current_price):
+        if self.order_type == "buy":
+            self.floating_profit = (current_price - self.entry_price) * self.volume
+        else:  # sell
+            self.floating_profit = (self.entry_price - current_price) * self.volume
+
+    def close_position(self, exit_price):
+        self.exit_price = exit_price
+        if self.order_type == "buy":
+            self.profit = (exit_price - self.entry_price) * self.volume
+        else:  # sell
+            self.profit = (self.entry_price - exit_price) * self.volume
+        self.closed = True
+        return self.profit
+
+
 class Order:
     def __init__(self, order_type, price, volume, commission_rate):
         self.id = str(uuid.uuid4())[:8]
@@ -27,6 +53,7 @@ class OrderManager:
         min_orders=20,
         max_orders=50,
     ):
+        # ... (оставьте существующую инициализацию)
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.commission_rate = commission_rate
@@ -45,6 +72,8 @@ class OrderManager:
         self.current_price = None  # Хранение текущей цены
         self.price_history = []  # Хранение истории цен
         self.graph = graph
+        self.positions = []
+        self.closed_positions = []
 
     def calculate_grid_boundaries(self, ema, price_history):
         hist_min = np.min(price_history)
@@ -104,6 +133,13 @@ class OrderManager:
 
     def place_order(self, order_type, price, volume):
         print(f"Attempting to place order: Type={order_type}, Price={price}, Volume={volume}")
+
+        if (order_type == "buy" and price >= self.current_price) or (
+            order_type == "sell" and price <= self.current_price
+        ):
+            print(f"Invalid {order_type} order price. Current price: {self.current_price}")
+            return False
+
         required_margin = price * volume
         estimated_commission = price * volume * self.commission_rate
         print(
@@ -161,7 +197,7 @@ class OrderManager:
             volume *= self.free_margin / total_margin_required
 
         self.place_grid_orders(buy_prices, sell_prices, volume)
-        
+
         print(f"Orders placed. Total Orders: {len(self.orders)}")
         self.graph.update_orders(self.orders)
 
@@ -198,18 +234,32 @@ class OrderManager:
         orders_executed = False
         for order in self.orders[:]:  # Используем копию списка
             if not order.executed:
-                if (order.order_type == "buy" and price_range[0] <= order.price <= price_range[1]) or \
-                   (order.order_type == "sell" and price_range[0] <= order.price <= price_range[1]):
+                if (order.order_type == "buy" and price_range[0] <= order.price <= price_range[1]) or (
+                    order.order_type == "sell" and price_range[0] <= order.price <= price_range[1]
+                ):
                     print(f"Executing order: {order.id}")
                     self.execute_order(order, order.price)
                     orders_executed = True
 
         if orders_executed:
-            # Обновляем отображение сетки после выполнения ордеров, но до обновления самой сетки
             self.update_display()
 
-        # После проверки всех ордеров, обновляем сетку
-        if (orders_executed or not self.orders) and self.current_ema is not None:
+        # Проверяем, нужно ли обновить сетку
+        buy_orders = [order for order in self.orders if order.order_type == "buy" and not order.executed]
+        sell_orders = [order for order in self.orders if order.order_type == "sell" and not order.executed]
+        total_orders = len(buy_orders) + len(sell_orders)
+
+        should_update_grid = False
+
+        if total_orders == 0:
+            print("No open orders. Initializing grid.")
+            should_update_grid = True
+        elif total_orders > 0:
+            if len(buy_orders) <= total_orders * 0.2 or len(sell_orders) <= total_orders * 0.2:
+                print("Low order count on one side. Updating grid.")
+                should_update_grid = True
+
+        if should_update_grid and self.current_ema is not None:
             self.update_grid(self.current_ema, current_price, self.price_history)
 
     def update_display(self):
@@ -218,38 +268,50 @@ class OrderManager:
         pass
 
     def execute_order(self, order, execution_price):
-        print(f"Executing order {order.id} at price {execution_price}")
         order.executed = True
         order.execution_price = execution_price
         order.commission = order.volume * execution_price * self.commission_rate
         order.execution_time = len(self.price_history) - 1
 
+        # Проверяем, есть ли открытая позиция противоположного типа
+        opposite_position = next((pos for pos in self.positions if pos.order_type != order.order_type), None)
+
+        if opposite_position:
+            # Закрываем противоположную позицию
+            profit = opposite_position.close_position(execution_price)
+            self.profit += profit
+            self.balance += profit
+            self.closed_positions.append(opposite_position)
+            self.positions.remove(opposite_position)
+            print(f"Closed opposite position with profit: {profit:.8f}")
+        else:
+            # Открываем новую позицию
+            new_position = Position(order.order_type, execution_price, order.volume)
+            self.positions.append(new_position)
+            print(f"Opened new position: {order.order_type} at {execution_price}")
+
+        # Обновляем баланс и свободную маржу
         if order.order_type == "buy":
             self.balance -= order.volume * execution_price + order.commission
-            new_price = execution_price * (1 + self.grid_step_percent / 100)
-            self.place_order("sell", new_price, order.volume)
-        elif order.order_type == "sell":
+        else:  # sell
             self.balance += order.volume * execution_price - order.commission
-            new_price = execution_price * (1 - self.grid_step_percent / 100)
-            self.place_order("buy", new_price, order.volume)
 
-        order.profit = (
-            order.volume
-            * (execution_price - order.price if order.order_type == "sell" else order.price - execution_price)
-        ) - order.commission
-        self.profit += order.profit
+        self.free_margin = self.balance - sum(pos.volume * self.current_price for pos in self.positions)
+
+        # Размещаем новый ордер в противоположном направлении
+        new_price = execution_price * (
+            1 + self.grid_step_percent / 100 if order.order_type == "buy" else 1 - self.grid_step_percent / 100
+        )
+        self.place_order("sell" if order.order_type == "buy" else "buy", new_price, order.volume)
 
         self.executed_orders.append(order)
         self.orders.remove(order)
         if order not in self.order_history:
             self.order_history.append(order)
 
-        self.update_free_margin_after_execution()
         print(
-            f"Executed {order.order_type} order at {execution_price} for {order.volume} units. Commission: {order.commission:.8f}, Profit: {order.profit:.8f}, New balance: {self.balance:.8f}, Total Profit: {self.profit:.8f}, Free Margin: {self.free_margin:.8f}"
+            f"Executed {order.order_type} order at {execution_price} for {order.volume} units. Commission: {order.commission:.8f}, New balance: {self.balance:.8f}, Total Profit: {self.profit:.8f}, Free Margin: {self.free_margin:.8f}"
         )
-
-        # Не обновляем сетку здесь, так как это делается после выполнения всех ордеров в check_orders
 
     def initialize_grid(self):
         if self.current_ema is not None and len(self.price_history) > 0:
@@ -271,14 +333,9 @@ class OrderManager:
         return total_commission
 
     def calculate_floating_profit(self, current_price):
-        self.floating_profit = self.calculate_unrealized_pnl(current_price)
-        for order in self.orders:
-            if not order.executed:
-                if order.order_type == "buy":
-                    self.floating_profit += (current_price - order.price) * order.volume
-                elif order.order_type == "sell":
-                    self.floating_profit += (order.price - current_price) * order.volume
-        self.floating_profit -= self.calculate_total_commission()
+        self.floating_profit = sum(pos.floating_profit for pos in self.positions)
+        for position in self.positions:
+            position.update_floating_profit(current_price)
         print(f"Floating Profit calculated: {self.floating_profit}")
 
     def calculate_unrealized_pnl(self, current_price):
@@ -292,14 +349,20 @@ class OrderManager:
         return unrealized_pnl
 
     def calculate_free_margin(self):
-        total_order_value = sum(order.price * order.volume for order in self.orders if not order.executed)
-        self.free_margin = self.balance + self.floating_profit - total_order_value
-        print(f"Total Order Value: {total_order_value}, Free Margin: {self.free_margin}")
+        total_position_value = sum(pos.volume * self.current_price for pos in self.positions)
+        self.free_margin = self.balance - total_position_value
+        print(f"Total Position Value: {total_position_value}, Free Margin: {self.free_margin}")
 
     def update_free_margin_after_execution(self):
         total_executed_order_value = sum(order.price * order.volume for order in self.orders if order.executed)
         self.free_margin = self.balance + self.floating_profit - total_executed_order_value
         print(f"Updated Free Margin: {self.free_margin}")
+
+    def get_open_positions(self):
+        return self.positions
+
+    def get_closed_positions(self):
+        return self.closed_positions
 
     def get_order_history(self):
         return self.order_history

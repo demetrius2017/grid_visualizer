@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 
 
@@ -7,29 +7,49 @@ class MarketGraph(QtWidgets.QWidget):
         super().__init__()
         self.buy_spots = []
         self.sell_spots = []
-        self.layout = QtWidgets.QVBoxLayout(self)
+        self.init_ui()
+        self.current_price_line = None
+
+    def init_ui(self):
+        # Основной вертикальный layout
+        main_layout = QtWidgets.QVBoxLayout(self)
+
+        # Создаем QSplitter для вертикального разделения
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+
+        # Верхний график (Market Price Simulation)
         self.graphWidget = pg.PlotWidget()
-        self.layout.addWidget(self.graphWidget)
-
-        self.report_label = QtWidgets.QLabel()
-        self.layout.addWidget(self.report_label)
-
-        self.balance_graph = pg.PlotWidget()
-        self.layout.addWidget(self.balance_graph)
-
-        self.orders_table = QtWidgets.QTableWidget()
-        self.orders_table.setColumnCount(6)
-        self.orders_table.setHorizontalHeaderLabels(["ID", "Price", "Direction", "Commission", "Volume", "Profit"])
-        self.layout.addWidget(self.orders_table)
-
-        self.init_graph()
-
-    def init_graph(self):
         self.graphWidget.setTitle("Market Price Simulation")
         self.graphWidget.setLabel("left", "Price")
         self.graphWidget.setLabel("bottom", "Time")
         self.graphWidget.showGrid(x=True, y=True)
+        splitter.addWidget(self.graphWidget)
 
+        # Нижний график (Balance, Free Margin, and Margin)
+        self.balance_graph = pg.PlotWidget()
+        self.balance_graph.setTitle("Balance, Free Margin, and Margin")
+        self.balance_graph.setLabel("left", "Value")
+        self.balance_graph.setLabel("bottom", "Time")
+        self.balance_graph.showGrid(x=True, y=True)
+        splitter.addWidget(self.balance_graph)
+
+        # Таблица ордеров
+        self.orders_table = QtWidgets.QTableWidget()
+        self.orders_table.setColumnCount(6)
+        self.orders_table.setHorizontalHeaderLabels(["ID", "Price", "Direction", "Commission", "Volume", "Profit"])
+        splitter.addWidget(self.orders_table)
+
+        # Добавляем splitter в основной layout
+        main_layout.addWidget(splitter)
+
+        # Отчет
+        self.report_label = QtWidgets.QLabel()
+        main_layout.addWidget(self.report_label)
+
+        self.init_plot_items()
+
+    def init_plot_items(self):
+        # Инициализация элементов графика цены
         self.price_curve = self.graphWidget.plot(pen=pg.mkPen("y", width=1))
         self.ema_curve = self.graphWidget.plot(pen=pg.mkPen("b", width=1))
         self.buy_orders_curve = pg.ScatterPlotItem(
@@ -42,12 +62,10 @@ class MarketGraph(QtWidgets.QWidget):
         self.graphWidget.addItem(self.buy_orders_curve)
         self.graphWidget.addItem(self.sell_orders_curve)
         self.graphWidget.addItem(self.order_history_curve)
+        self.order_book_item = pg.GraphItem()
+        self.graphWidget.addItem(self.order_book_item)
 
-        self.balance_graph.setTitle("Balance, Free Margin, and Margin")
-        self.balance_graph.setLabel("left", "Value")
-        self.balance_graph.setLabel("bottom", "Time")
-        self.balance_graph.showGrid(x=True, y=True)
-
+        # Инициализация элементов графика баланса
         self.balance_curve = self.balance_graph.plot(pen=pg.mkPen("g", width=1), name="Balance")
         self.free_margin_curve = self.balance_graph.plot(pen=pg.mkPen("b", width=1), name="Free Margin")
         self.margin_curve = self.balance_graph.plot(pen=pg.mkPen("r", width=1), name="Margin")
@@ -59,39 +77,68 @@ class MarketGraph(QtWidgets.QWidget):
         if ema_data:
             # Убедимся, что длина ema_data соответствует длине данных цены
             x_data = range(len(self.price_curve.getData()[0]))
-            y_data = ema_data[-len(x_data):]  # Берем только последние значения EMA, соответствующие данным цены
+            y_data = ema_data[-len(x_data) :]  # Берем только последние значения EMA, соответствующие данным цены
             self.ema_curve.setData(x_data, y_data)
             self.ema_curve.show()
         else:
             print("No EMA data to display")
 
-    def update_orders(self, orders):
-        current_time = len(self.price_curve.getData()[0]) - 1
+    def update_order_book(self, buy_orders, sell_orders, current_time):
+        current_price = self.price_curve.getData()[1][-1]
+        
+        # Фильтруем ордера
+        buy_orders = [order for order in buy_orders if order.price <= current_price]
+        sell_orders = [order for order in sell_orders if order.price >= current_price]
+        
+        buy_prices = [order.price for order in buy_orders]
+        sell_prices = [order.price for order in sell_orders]
+        
+        print(f"Update order book: Buy orders: {len(buy_orders)}, Sell orders: {len(sell_orders)}")
+        
+        all_prices = buy_prices + sell_prices + [current_price]
+        if len(all_prices) <= 1:
+            print("Not enough prices for order book update")
+            self.buy_orders_curve.setData([])
+            self.sell_orders_curve.setData([])
+            return
 
-        # Удаляем исполненные ордера
-        self.buy_spots = [spot for spot in self.buy_spots if spot["data"] == 1]
-        self.sell_spots = [spot for spot in self.sell_spots if spot["data"] == 1]
+        min_price = min(all_prices)
+        max_price = max(all_prices)
+        price_range = max_price - min_price
 
-        for order in orders:
-            if not order.executed:
-                spot = {"pos": (current_time, order.price), "data": 1}
-                if order.order_type == "buy":
-                    self.buy_spots.append(spot)
-                else:
-                    self.sell_spots.append(spot)
+        # Добавляем небольшой отступ сверху и снизу для лучшей визуализации
+        padding = price_range * 0.1
+        min_price -= padding
+        max_price += padding
+        price_range = max_price - min_price
 
-        # Обновляем прозрачность старых ордеров
-        for spots in [self.buy_spots, self.sell_spots]:
-            for spot in spots:
-                age = current_time - spot["pos"][0]
-                spot["brush"] = (
-                    pg.mkBrush(0, 255, 0, max(20, 255 - age * 5))
-                    if spots == self.buy_spots
-                    else pg.mkBrush(255, 0, 0, max(20, 255 - age * 5))
-                )
+        print(f"Price range: {min_price:.8f} - {max_price:.8f}")
 
-        self.buy_orders_curve.setData(self.buy_spots)
-        self.sell_orders_curve.setData(self.sell_spots)
+        buy_positions = []
+        sell_positions = []
+
+        for order in buy_orders:
+            y = (order.price - min_price) / price_range
+            buy_positions.append({'pos': (current_time, y)})
+
+        for order in sell_orders:
+            y = (order.price - min_price) / price_range
+            sell_positions.append({'pos': (current_time, y)})
+
+        print(f"Plotted buy positions: {len(buy_positions)}, sell positions: {len(sell_positions)}")
+
+        self.buy_orders_curve.setData(buy_positions)
+        self.sell_orders_curve.setData(sell_positions)
+
+        # Обновляем диапазон осей Y
+        self.graphWidget.setYRange(min_price, max_price)
+
+        # Обновляем линию текущей цены
+        current_y = (current_price - min_price) / price_range
+        if self.current_price_line is None:
+            self.current_price_line = self.graphWidget.addLine(y=current_y, pen=pg.mkPen('w', width=1))
+        else:
+            self.current_price_line.setPos(current_time, current_y)
 
     def update_order_history(self, order_history):
         history_spots = []
