@@ -83,9 +83,7 @@ class MarketGraph(QtWidgets.QWidget):
         else:
             print("No EMA data to display")
 
-    def update_order_book(self, buy_orders, sell_orders, current_time):
-        current_price = self.price_curve.getData()[1][-1]
-        
+    def update_order_book(self, buy_orders, sell_orders, current_time, current_price):
         # Фильтруем ордера
         buy_orders = [order for order in buy_orders if order.price <= current_price]
         sell_orders = [order for order in sell_orders if order.price >= current_price]
@@ -108,22 +106,17 @@ class MarketGraph(QtWidgets.QWidget):
 
         # Добавляем небольшой отступ сверху и снизу для лучшей визуализации
         padding = price_range * 0.1
-        min_price -= padding
-        max_price += padding
-        price_range = max_price - min_price
-
-        print(f"Price range: {min_price:.8f} - {max_price:.8f}")
+        min_display_price = min_price - padding
+        max_display_price = max_price + padding
 
         buy_positions = []
         sell_positions = []
 
         for order in buy_orders:
-            y = (order.price - min_price) / price_range
-            buy_positions.append({'pos': (current_time, y)})
+            buy_positions.append({'pos': (current_time, order.price)})
 
         for order in sell_orders:
-            y = (order.price - min_price) / price_range
-            sell_positions.append({'pos': (current_time, y)})
+            sell_positions.append({'pos': (current_time, order.price)})
 
         print(f"Plotted buy positions: {len(buy_positions)}, sell positions: {len(sell_positions)}")
 
@@ -131,14 +124,14 @@ class MarketGraph(QtWidgets.QWidget):
         self.sell_orders_curve.setData(sell_positions)
 
         # Обновляем диапазон осей Y
-        self.graphWidget.setYRange(min_price, max_price)
+        self.graphWidget.setYRange(min_display_price, max_display_price)
 
         # Обновляем линию текущей цены
-        current_y = (current_price - min_price) / price_range
         if self.current_price_line is None:
-            self.current_price_line = self.graphWidget.addLine(y=current_y, pen=pg.mkPen('w', width=1))
+            self.current_price_line = pg.InfiniteLine(pos=current_price, angle=0, pen=pg.mkPen('w', width=1))
+            self.graphWidget.addItem(self.current_price_line)
         else:
-            self.current_price_line.setPos(current_time, current_y)
+            self.current_price_line.setPos(current_price)
 
     def update_order_history(self, order_history):
         history_spots = []

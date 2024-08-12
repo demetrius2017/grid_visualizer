@@ -64,6 +64,7 @@ class TradingSimulator:
     def update(self):
         new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
         self.prices.append(new_price)
+        self.current_price = new_price
 
         if len(self.ema) > len(self.prices):
             print("Warning: EMA length exceeds price data length. Truncating EMA.")
@@ -83,8 +84,6 @@ class TradingSimulator:
         self.order_manager.current_price = new_price
         self.order_manager.price_history = self.prices
 
-        self.current_price = new_price
-
         # Обновление графика
         self.graph.update_graph(self.prices)
         self.graph.update_ema(self.ema)
@@ -92,15 +91,17 @@ class TradingSimulator:
         # Проверка и исполнение ордеров
         self.order_manager.check_orders(new_price)
 
-        # Обновление таблицы исполненных ордеров и отчетов
-        executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
-        self.graph.update_orders_table(executed_orders)
+        # Обновление отображения ордеров
         current_time = len(self.prices) - 1
         buy_orders = [order for order in self.order_manager.orders if order.order_type == "buy" and not order.executed]
         sell_orders = [
             order for order in self.order_manager.orders if order.order_type == "sell" and not order.executed
         ]
-        self.graph.update_order_book(buy_orders, sell_orders, current_time)
+        self.graph.update_order_book(buy_orders, sell_orders, current_time, new_price)
+
+        # Обновление таблицы исполненных ордеров и отчетов
+        executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
+        self.graph.update_orders_table(executed_orders)
 
         self.update_balances()
         self.update_report()
@@ -115,8 +116,7 @@ class TradingSimulator:
 
         open_positions = self.order_manager.get_open_positions()
         closed_positions = self.order_manager.get_closed_positions()
-        current_price = self.current_price
-        self.positions_window.update_positions(open_positions, closed_positions, current_price)
+        self.positions_window.update_positions(open_positions, closed_positions, self.current_price)
 
     def update_balances(self):
         self.balance_history.append(self.order_manager.get_balance())

@@ -3,7 +3,7 @@ import numpy as np
 
 
 class Position:
-    def __init__(self, order_type, price, volume):
+    def __init__(self, order_type, price, volume, commission_rate=0.00016):
         self.order_type = order_type
         self.entry_price = price
         self.volume = volume
@@ -11,6 +11,7 @@ class Position:
         self.closed = False
         self.exit_price = None
         self.profit = 0
+        self.commission = price * volume * commission_rate
 
     def update_floating_profit(self, current_price):
         if self.order_type == "buy":
@@ -21,9 +22,9 @@ class Position:
     def close_position(self, exit_price):
         self.exit_price = exit_price
         if self.order_type == "buy":
-            self.profit = (exit_price - self.entry_price) * self.volume
+            self.profit = (exit_price - self.entry_price) * self.volume - self.commission
         else:  # sell
-            self.profit = (self.entry_price - exit_price) * self.volume
+            self.profit = (self.entry_price - exit_price) * self.volume - self.commission
         self.closed = True
         return self.profit
 
@@ -286,7 +287,7 @@ class OrderManager:
             print(f"Closed opposite position with profit: {profit:.8f}")
         else:
             # Открываем новую позицию
-            new_position = Position(order.order_type, execution_price, order.volume)
+            new_position = Position(order.order_type, execution_price, order.volume, self.commission_rate)
             self.positions.append(new_position)
             print(f"Opened new position: {order.order_type} at {execution_price}")
 
