@@ -9,6 +9,8 @@ class MarketGraph(QtWidgets.QWidget):
         self.sell_spots = []
         self.init_ui()
         self.current_price_line = None
+        self.visible_range = 1000  # Количество точек, отображаемых на графике
+        self.data_offset = 0  # Смещение данных для скроллинга
 
     def init_ui(self):
         # Основной вертикальный layout
@@ -24,6 +26,10 @@ class MarketGraph(QtWidgets.QWidget):
         self.graphWidget.setLabel("bottom", "Time")
         self.graphWidget.showGrid(x=True, y=True)
         splitter.addWidget(self.graphWidget)
+        # Добавьте горизонтальный ползунок для скроллинга
+        self.scroll_bar = QtWidgets.QScrollBar(QtCore.Qt.Horizontal)
+        self.scroll_bar.valueChanged.connect(self.update_visible_range)
+        main_layout.addWidget(self.scroll_bar)
 
         # Нижний график (Balance, Free Margin, and Margin)
         self.balance_graph = pg.PlotWidget()
@@ -64,6 +70,8 @@ class MarketGraph(QtWidgets.QWidget):
         self.graphWidget.addItem(self.order_history_curve)
         self.order_book_item = pg.GraphItem()
         self.graphWidget.addItem(self.order_book_item)
+        self.graphWidget.setMouseEnabled(x=True, y=False)
+        self.graphWidget.setAutoVisible(y=True)
 
         # Инициализация элементов графика баланса
         self.balance_curve = self.balance_graph.plot(pen=pg.mkPen("g", width=1), name="Balance")
@@ -71,79 +79,22 @@ class MarketGraph(QtWidgets.QWidget):
         self.margin_curve = self.balance_graph.plot(pen=pg.mkPen("r", width=1), name="Margin")
 
     def update_graph(self, price_data):
-        self.price_curve.setData(range(len(price_data)), price_data)
+        if len(price_data) > self.visible_range:
+            self.scroll_bar.setMaximum(len(price_data) - self.visible_range)
+            self.scroll_bar.setPageStep(self.visible_range)
+        else:
+            self.scroll_bar.setMaximum(0)
+
+        visible_data = price_data[self.data_offset : self.data_offset + self.visible_range]
+        self.price_curve.setData(range(len(visible_data)), visible_data)
+        self.graphWidget.setXRange(0, len(visible_data))
 
     def update_ema(self, ema_data):
         if ema_data:
-            # Убедимся, что длина ema_data соответствует длине данных цены
-            x_data = range(len(self.price_curve.getData()[0]))
-            y_data = ema_data[-len(x_data) :]  # Берем только последние значения EMA, соответствующие данным цены
-            self.ema_curve.setData(x_data, y_data)
+            visible_ema = ema_data[self.data_offset : self.data_offset + self.visible_range]
+            self.ema_curve.setData(range(len(visible_ema)), visible_ema)
             self.ema_curve.show()
-        else:
-            print("No EMA data to display")
 
-    def update_order_book(self, buy_orders, sell_orders, current_time, current_price):
-        # Фильтруем ордера
-        buy_orders = [order for order in buy_orders if order.price <= current_price]
-        sell_orders = [order for order in sell_orders if order.price >= current_price]
-        
-        buy_prices = [order.price for order in buy_orders]
-        sell_prices = [order.price for order in sell_orders]
-        
-        print(f"Update order book: Buy orders: {len(buy_orders)}, Sell orders: {len(sell_orders)}")
-        
-        all_prices = buy_prices + sell_prices + [current_price]
-        if len(all_prices) <= 1:
-            print("Not enough prices for order book update")
-            self.buy_orders_curve.setData([])
-            self.sell_orders_curve.setData([])
-            return
-
-        min_price = min(all_prices)
-        max_price = max(all_prices)
-        price_range = max_price - min_price
-
-        # Добавляем небольшой отступ сверху и снизу для лучшей визуализации
-        padding = price_range * 0.1
-        min_display_price = min_price - padding
-        max_display_price = max_price + padding
-
-        buy_positions = []
-        sell_positions = []
-
-        for order in buy_orders:
-            buy_positions.append({'pos': (current_time, order.price)})
-
-        for order in sell_orders:
-            sell_positions.append({'pos': (current_time, order.price)})
-
-        print(f"Plotted buy positions: {len(buy_positions)}, sell positions: {len(sell_positions)}")
-
-        self.buy_orders_curve.setData(buy_positions)
-        self.sell_orders_curve.setData(sell_positions)
-
-        # Обновляем диапазон осей Y
-        self.graphWidget.setYRange(min_display_price, max_display_price)
-
-        # Обновляем линию текущей цены
-        if self.current_price_line is None:
-            self.current_price_line = pg.InfiniteLine(pos=current_price, angle=0, pen=pg.mkPen('w', width=1))
-            self.graphWidget.addItem(self.current_price_line)
-        else:
-            self.current_price_line.setPos(current_price)
-
-    def update_order_history(self, order_history):
-        history_spots = []
-        for order in order_history:
-            if order.executed:
-                spot = {
-                    "pos": (order.execution_time, order.execution_price),
-                    "data": 1,
-                    "brush": pg.mkBrush("g") if order.order_type == "buy" else pg.mkBrush("r"),
-                }
-                history_spots.append(spot)
-        self.order_history_curve.setData(history_spots)
 
     def update_report(self, balance, profit, floating_profit, free_margin):
         self.report_label.setText(
@@ -178,3 +129,82 @@ class MarketGraph(QtWidgets.QWidget):
         self.orders_table.setRowCount(0)
         self.report_label.setText("")
         print("Graph cleared")
+
+    def update_visible_range(self, value=None):
+        if value is None:
+            # Автоматически следовать за последней ценой
+            if len(self.full_price_data) > self.visible_range:
+                self.data_offset = max(0, len(self.full_price_data) - self.visible_range)
+            else:
+                self.data_offset = 0
+        else:
+            self.data_offset = value
+
+        self.scroll_bar.setValue(self.data_offset)
+
+        visible_data = self.full_price_data[self.data_offset : self.data_offset + self.visible_range]
+        self.price_curve.setData(range(self.data_offset, self.data_offset + len(visible_data)), visible_data)
+        self.graphWidget.setXRange(self.data_offset, self.data_offset + len(visible_data))
+
+        if self.full_ema_data:
+            visible_ema = self.full_ema_data[self.data_offset : self.data_offset + self.visible_range]
+            self.ema_curve.setData(range(self.data_offset, self.data_offset + len(visible_ema)), visible_ema)
+
+        self.update_order_book(
+            self.full_buy_orders, self.full_sell_orders, len(self.full_price_data) - 1, self.full_price_data[-1]
+        )
+        self.update_order_history(self.full_order_history)
+
+    def update_order_book(self, buy_orders, sell_orders, current_time, current_price):
+        # Фильтруем ордера в видимом диапазоне
+        visible_buy_orders = buy_orders[-self.visible_range:]
+        visible_sell_orders = sell_orders[-self.visible_range:]
+
+        buy_positions = []
+        sell_positions = []
+
+        for i, order in enumerate(visible_buy_orders):
+            buy_positions.append({"pos": (current_time, order.price)})
+
+        for i, order in enumerate(visible_sell_orders):
+            sell_positions.append({"pos": (current_time, order.price)})
+
+        self.buy_orders_curve.setData(buy_positions)
+        self.sell_orders_curve.setData(sell_positions)
+
+        # Обновляем линию текущей цены
+        if self.current_price_line is None:
+            self.current_price_line = pg.InfiniteLine(pos=current_time, angle=90, pen=pg.mkPen("w", width=1))
+            self.graphWidget.addItem(self.current_price_line)
+        else:
+            self.current_price_line.setValue(current_time)
+
+        # Обновляем диапазон осей Y
+        all_prices = [order.price for order in visible_buy_orders + visible_sell_orders] + [current_price]
+        if all_prices:
+            min_price = min(all_prices)
+            max_price = max(all_prices)
+            price_range = max_price - min_price
+            padding = price_range * 0.1
+            self.graphWidget.setYRange(min_price - padding, max_price + padding)
+
+    def update_order_history(self, order_history):
+        visible_history = order_history[-self.visible_range:]
+        history_spots = []
+        for order in visible_history:
+            if order.executed:
+                spot = {
+                    "pos": (order.execution_time, order.execution_price),
+                    "data": 1,
+                    "brush": pg.mkBrush("g") if order.order_type == "buy" else pg.mkBrush("r"),
+                }
+                history_spots.append(spot)
+        self.order_history_curve.setData(history_spots)
+
+    def set_full_data(self, price_data, ema_data, buy_orders, sell_orders, order_history):
+        self.full_price_data = price_data
+        self.full_ema_data = ema_data
+        self.full_buy_orders = buy_orders
+        self.full_sell_orders = sell_orders
+        self.full_order_history = order_history
+        self.update_visible_range()  # Вызываем без аргумента для автоматического скроллинга

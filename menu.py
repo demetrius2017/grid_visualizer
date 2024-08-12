@@ -83,3 +83,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
             settings = dialog.get_settings()
             self.simulator.set_grid_settings(settings)
+
+    def closeEvent(self, event):
+        # Закрываем окно позиций, если оно открыто
+        if self.simulator.positions_window is not None:
+            self.simulator.positions_window.close()
+        event.accept()

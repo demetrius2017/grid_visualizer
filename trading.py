@@ -40,6 +40,9 @@ class TradingSimulator:
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update)
+        self.update_counter = 0
+        self.update_frequency = 1  # Обновлять график каждые 10 итераций
+        self.price_buffer = []  # Буфер для хранения промежуточных цен
 
         self.graph.graphWidget.scene().sigMouseMoved.connect(self.mouse_moved)
 
@@ -63,41 +66,37 @@ class TradingSimulator:
 
     def update(self):
         new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
-        self.prices.append(new_price)
+        self.price_buffer.append(new_price)
         self.current_price = new_price
 
-        if len(self.ema) > len(self.prices):
-            print("Warning: EMA length exceeds price data length. Truncating EMA.")
-            self.ema = self.ema[-len(self.prices) :]
+        if len(self.price_buffer) >= self.update_frequency:
+            self.prices.extend(self.price_buffer)
+            self.price_buffer = []
 
-        if len(self.prices) >= self.ema_period:
-            if len(self.ema) == 0:
-                self.ema.append(np.mean(self.prices[-self.ema_period :]))
-            else:
-                k = 2 / (self.ema_period + 1)
-                new_ema = new_price * k + self.ema[-1] * (1 - k)
-                self.ema.append(new_ema)
-        else:
-            self.ema.append(new_price)
+            if len(self.ema) > len(self.prices):
+                self.ema = self.ema[-len(self.prices):]
 
-        self.order_manager.current_ema = self.ema[-1]
-        self.order_manager.current_price = new_price
-        self.order_manager.price_history = self.prices
+            while len(self.ema) < len(self.prices):
+                if len(self.ema) == 0:
+                    self.ema.append(np.mean(self.prices[-self.ema_period:]))
+                else:
+                    k = 2 / (self.ema_period + 1)
+                    new_ema = self.prices[len(self.ema)] * k + self.ema[-1] * (1 - k)
+                    self.ema.append(new_ema)
 
-        # Обновление графика
-        self.graph.update_graph(self.prices)
-        self.graph.update_ema(self.ema)
+            self.order_manager.current_ema = self.ema[-1]
+            self.order_manager.current_price = new_price
+            self.order_manager.price_history = self.prices
 
-        # Проверка и исполнение ордеров
-        self.order_manager.check_orders(new_price)
+            # Проверка и исполнение ордеров
+            self.order_manager.check_orders(new_price)
 
-        # Обновление отображения ордеров
-        current_time = len(self.prices) - 1
+            self.update_display()
+
+    def update_display(self):
         buy_orders = [order for order in self.order_manager.orders if order.order_type == "buy" and not order.executed]
-        sell_orders = [
-            order for order in self.order_manager.orders if order.order_type == "sell" and not order.executed
-        ]
-        self.graph.update_order_book(buy_orders, sell_orders, current_time, new_price)
+        sell_orders = [order for order in self.order_manager.orders if order.order_type == "sell" and not order.executed]
+        self.graph.set_full_data(self.prices, self.ema, buy_orders, sell_orders, self.order_manager.order_history)
 
         # Обновление таблицы исполненных ордеров и отчетов
         executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
@@ -105,8 +104,6 @@ class TradingSimulator:
 
         self.update_balances()
         self.update_report()
-
-        # Обновление графика открытых позиций
         self.update_positions_window()
 
     def update_positions_window(self):
@@ -139,7 +136,7 @@ class TradingSimulator:
 
         self.graph.update_report(balance, profit, floating_profit, free_margin)
         self.graph.update_order_history(self.order_manager.get_order_history())
-        print(f"Balance: {balance}, Profit: {profit}, Floating Profit: {floating_profit}, Free Margin: {free_margin}")
+        # print(f"Balance: {balance}, Profit: {profit}, Floating Profit: {floating_profit}, Free Margin: {free_margin}")
 
         # Проверка на критические уровни
         if free_margin < balance * 0.1:  # Если свободная маржа меньше 10% от баланса
