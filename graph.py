@@ -94,7 +94,6 @@ class MarketGraph(QtWidgets.QWidget):
         self.distribution_graph.addItem(self.histogram_bars)
         self.distribution_graph.addItem(self.current_price_line_hist)
 
-
     def update_distribution_chart(self):
         if self.distribution_data:
             hist = self.distribution_data['hist']
@@ -103,27 +102,39 @@ class MarketGraph(QtWidgets.QWidget):
             x = self.distribution_data['x']
             current_price = self.distribution_data['current_price']
 
-            # Обновляем гистограмму
+            # Очищаем график перед обновлением
+            self.distribution_graph.clear()
+
+            # Создаем новый BarGraphItem для гистограммы
             bar_positions = [(bin_edges[i] + bin_edges[i+1])/2 for i in range(len(bin_edges)-1)]
             colors = ['g' if abs(h - n) <= 0.2 else 'r' for h, n in zip(hist, normal_dist)]
             
-            # Создаем новый BarGraphItem вместо обновления существующего
-            self.distribution_graph.clear()  # Очищаем график перед добавлением новых элементов
-            self.histogram_bars = pg.BarGraphItem(x=bar_positions, height=hist, width=0.8, brushes=colors)
+            # Нормализуем высоту столбцов гистограммы
+            max_height = max(max(hist), max(normal_dist))
+            normalized_hist = [h / max_height for h in hist]
+            
+            self.histogram_bars = pg.BarGraphItem(x=bar_positions, height=normalized_hist, width=(bin_edges[1]-bin_edges[0])*0.8, brushes=colors)
             self.distribution_graph.addItem(self.histogram_bars)
 
             # Обновляем нормальную кривую
-            self.normal_curve.setData(x, normal_dist)
+            normalized_normal_dist = [n / max_height for n in normal_dist]
+            self.normal_curve = self.distribution_graph.plot(x, normalized_normal_dist, pen=pg.mkPen('r', width=2))
 
             # Обновляем линию текущей цены
-            if self.current_price_line_hist is None:
-                self.current_price_line_hist = pg.InfiniteLine(angle=90, movable=False, pen='b')
-                self.distribution_graph.addItem(self.current_price_line_hist)
+            self.current_price_line_hist = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('b', width=2))
+            self.distribution_graph.addItem(self.current_price_line_hist)
             self.current_price_line_hist.setValue(current_price)
 
-            # Обновляем диапазон осей
-            self.distribution_graph.setXRange(min(bin_edges), max(bin_edges))
-            self.distribution_graph.setYRange(0, max(max(hist), max(normal_dist)) * 1.1)
+            # Настраиваем оси
+            self.distribution_graph.setLabel('left', 'Normalized Frequency')
+            self.distribution_graph.setLabel('bottom', 'Price')
+
+            # Устанавливаем диапазон осей
+            x_min, x_max = min(bin_edges), max(bin_edges)
+            x_range = x_max - x_min
+            self.distribution_graph.setXRange(x_min - 0.1*x_range, x_max + 0.1*x_range)
+            self.distribution_graph.setYRange(0, 1.1)  # Нормализованный диапазон от 0 до 1
+
 
     def update_graph(self, price_data):
         if len(price_data) > self.visible_range:
