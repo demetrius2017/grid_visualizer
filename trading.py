@@ -96,7 +96,8 @@ class TradingSimulator:
     def update_display(self):
         buy_orders = [order for order in self.order_manager.orders if order.order_type == "buy" and not order.executed]
         sell_orders = [order for order in self.order_manager.orders if order.order_type == "sell" and not order.executed]
-        self.graph.set_full_data(self.prices, self.ema, buy_orders, sell_orders, self.order_manager.order_history)
+        distribution_data = self.order_manager.get_price_distribution_data()
+        self.graph.set_full_data(self.prices, self.ema, buy_orders, sell_orders, self.order_manager.order_history, distribution_data)
 
         # Обновление таблицы исполненных ордеров и отчетов
         executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
@@ -119,7 +120,8 @@ class TradingSimulator:
         self.balance_history.append(self.order_manager.get_balance())
         self.free_margin_history.append(self.order_manager.get_free_margin())
         self.margin_history.append(self.order_manager.get_balance() - self.order_manager.get_free_margin())
-        self.graph.update_balance_graph(self.balance_history, self.free_margin_history, self.margin_history)
+        if self.balance_history:  # Проверяем, есть ли вообще какие-либо данные
+            self.graph.update_balance_graph(self.balance_history, self.free_margin_history, self.margin_history)
 
     def initialize_grid(self):
         if len(self.ema) > 0:

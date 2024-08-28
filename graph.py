@@ -11,6 +11,7 @@ class MarketGraph(QtWidgets.QWidget):
         self.current_price_line = None
         self.visible_range = 1000  # Количество точек, отображаемых на графике
         self.data_offset = 0  # Смещение данных для скроллинга
+        self.distribution_data = None
 
     def init_ui(self):
         # Основной вертикальный layout
@@ -26,7 +27,8 @@ class MarketGraph(QtWidgets.QWidget):
         self.graphWidget.setLabel("bottom", "Time")
         self.graphWidget.showGrid(x=True, y=True)
         splitter.addWidget(self.graphWidget)
-        # Добавьте горизонтальный ползунок для скроллинга
+
+        # Добавляем горизонтальный ползунок для скроллинга
         self.scroll_bar = QtWidgets.QScrollBar(QtCore.Qt.Horizontal)
         self.scroll_bar.valueChanged.connect(self.update_visible_range)
         main_layout.addWidget(self.scroll_bar)
@@ -38,6 +40,14 @@ class MarketGraph(QtWidgets.QWidget):
         self.balance_graph.setLabel("bottom", "Time")
         self.balance_graph.showGrid(x=True, y=True)
         splitter.addWidget(self.balance_graph)
+
+        # Добавляем график для гистограммы распределения цен
+        self.distribution_graph = pg.PlotWidget()
+        self.distribution_graph.setTitle("Price Distribution")
+        self.distribution_graph.setLabel("left", "Frequency")
+        self.distribution_graph.setLabel("bottom", "Price")
+        self.distribution_graph.showGrid(x=True, y=True)
+        splitter.addWidget(self.distribution_graph)
 
         # Таблица ордеров
         self.orders_table = QtWidgets.QTableWidget()
@@ -77,6 +87,43 @@ class MarketGraph(QtWidgets.QWidget):
         self.balance_curve = self.balance_graph.plot(pen=pg.mkPen("g", width=1), name="Balance")
         self.free_margin_curve = self.balance_graph.plot(pen=pg.mkPen("b", width=1), name="Free Margin")
         self.margin_curve = self.balance_graph.plot(pen=pg.mkPen("r", width=1), name="Margin")
+        # Инициализация элементов гистограммы
+        self.histogram_bars = pg.BarGraphItem(x=[], height=[], width=0.8, brush='g')
+        self.normal_curve = self.distribution_graph.plot(pen='r')
+        self.current_price_line_hist = pg.InfiniteLine(angle=90, movable=False, pen='b')
+        self.distribution_graph.addItem(self.histogram_bars)
+        self.distribution_graph.addItem(self.current_price_line_hist)
+
+
+    def update_distribution_chart(self):
+        if self.distribution_data:
+            hist = self.distribution_data['hist']
+            bin_edges = self.distribution_data['bin_edges']
+            normal_dist = self.distribution_data['normal_dist']
+            x = self.distribution_data['x']
+            current_price = self.distribution_data['current_price']
+
+            # Обновляем гистограмму
+            bar_positions = [(bin_edges[i] + bin_edges[i+1])/2 for i in range(len(bin_edges)-1)]
+            colors = ['g' if abs(h - n) <= 0.2 else 'r' for h, n in zip(hist, normal_dist)]
+            
+            # Создаем новый BarGraphItem вместо обновления существующего
+            self.distribution_graph.clear()  # Очищаем график перед добавлением новых элементов
+            self.histogram_bars = pg.BarGraphItem(x=bar_positions, height=hist, width=0.8, brushes=colors)
+            self.distribution_graph.addItem(self.histogram_bars)
+
+            # Обновляем нормальную кривую
+            self.normal_curve.setData(x, normal_dist)
+
+            # Обновляем линию текущей цены
+            if self.current_price_line_hist is None:
+                self.current_price_line_hist = pg.InfiniteLine(angle=90, movable=False, pen='b')
+                self.distribution_graph.addItem(self.current_price_line_hist)
+            self.current_price_line_hist.setValue(current_price)
+
+            # Обновляем диапазон осей
+            self.distribution_graph.setXRange(min(bin_edges), max(bin_edges))
+            self.distribution_graph.setYRange(0, max(max(hist), max(normal_dist)) * 1.1)
 
     def update_graph(self, price_data):
         if len(price_data) > self.visible_range:
@@ -113,9 +160,19 @@ class MarketGraph(QtWidgets.QWidget):
 
     def update_balance_graph(self, balance_history, free_margin_history, margin_history):
         if balance_history and free_margin_history and margin_history:
-            self.balance_curve.setData(range(len(balance_history)), balance_history)
-            self.free_margin_curve.setData(range(len(free_margin_history)), free_margin_history)
-            self.margin_curve.setData(range(len(margin_history)), margin_history)
+            x = list(range(len(balance_history)))
+            self.balance_curve.setData(x, balance_history)
+            self.free_margin_curve.setData(x, free_margin_history)
+            self.margin_curve.setData(x, margin_history)
+            
+            # Обновляем диапазон осей
+            self.balance_graph.setXRange(0, len(balance_history))
+            min_y = min(min(balance_history), min(free_margin_history), min(margin_history))
+            max_y = max(max(balance_history), max(free_margin_history), max(margin_history))
+            self.balance_graph.setYRange(min_y, max_y)
+            
+            # Принудительно обновляем график
+            self.balance_graph.update()
 
     def clear_graph(self):
         self.price_curve.setData([], [])
@@ -131,28 +188,24 @@ class MarketGraph(QtWidgets.QWidget):
         print("Graph cleared")
 
     def update_visible_range(self, value=None):
-        if value is None:
-            # Автоматически следовать за последней ценой
-            if len(self.full_price_data) > self.visible_range:
-                self.data_offset = max(0, len(self.full_price_data) - self.visible_range)
-            else:
-                self.data_offset = 0
-        else:
+        if value is not None:
             self.data_offset = value
+        else:
+            self.data_offset = max(0, len(self.full_price_data) - self.visible_range)
 
-        self.scroll_bar.setValue(self.data_offset)
-
-        visible_data = self.full_price_data[self.data_offset : self.data_offset + self.visible_range]
-        self.price_curve.setData(range(self.data_offset, self.data_offset + len(visible_data)), visible_data)
-        self.graphWidget.setXRange(self.data_offset, self.data_offset + len(visible_data))
-
+        end = min(self.data_offset + self.visible_range, len(self.full_price_data))
+        start = max(0, end - self.visible_range)
+        
+        visible_data = self.full_price_data[start:end]
+        self.price_curve.setData(range(start, end), visible_data)
+        
         if self.full_ema_data:
-            visible_ema = self.full_ema_data[self.data_offset : self.data_offset + self.visible_range]
-            self.ema_curve.setData(range(self.data_offset, self.data_offset + len(visible_ema)), visible_ema)
+            visible_ema = self.full_ema_data[start:end]
+            self.ema_curve.setData(range(start, end), visible_ema)
 
-        self.update_order_book(
-            self.full_buy_orders, self.full_sell_orders, len(self.full_price_data) - 1, self.full_price_data[-1]
-        )
+        self.graphWidget.setXRange(start, end)
+        
+        self.update_order_book(self.full_buy_orders, self.full_sell_orders, end - 1, self.full_price_data[-1])
         self.update_order_history(self.full_order_history)
 
     def update_order_book(self, buy_orders, sell_orders, current_time, current_price):
@@ -201,10 +254,22 @@ class MarketGraph(QtWidgets.QWidget):
                 history_spots.append(spot)
         self.order_history_curve.setData(history_spots)
 
-    def set_full_data(self, price_data, ema_data, buy_orders, sell_orders, order_history):
+    def set_full_data(self, price_data, ema_data, buy_orders, sell_orders, order_history, distribution_data):
         self.full_price_data = price_data
         self.full_ema_data = ema_data
         self.full_buy_orders = buy_orders
         self.full_sell_orders = sell_orders
         self.full_order_history = order_history
-        self.update_visible_range()  # Вызываем без аргумента для автоматического скроллинга
+
+        if len(price_data) > self.visible_range:
+            self.data_offset = max(0, len(price_data) - self.visible_range)
+            self.scroll_bar.setMaximum(self.data_offset)
+            self.scroll_bar.setPageStep(self.visible_range)
+        else:
+            self.data_offset = 0
+            self.scroll_bar.setMaximum(0)
+
+        self.update_visible_range(self.data_offset)
+
+        self.distribution_data = distribution_data
+        self.update_distribution_chart()

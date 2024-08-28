@@ -1,6 +1,6 @@
 import uuid
 import numpy as np
-
+from scipy import stats
 
 class Position:
     def __init__(self, order_type, price, volume, commission_rate=0.00016):
@@ -77,7 +77,8 @@ class OrderManager:
         self.closed_positions = []
         self.executed_orders_history = []
         self.price_distribution = []
-        self.distribution_period = 100  # Количество последних ордеров для анализа
+        self.distribution_period = 1000  # Количество последних цен для анализа
+        self.num_bins = 50  # Количество столбиков в гистограмме
         self.volume_growth_factor = 1.2  # Коэффициент роста объема ордеров
         self.price_frequency = {}
 
@@ -90,6 +91,32 @@ class OrderManager:
         price_bin = round(price, 4)  # Округляем до двух знаков после запятой
         self.price_frequency[price_bin] = self.price_frequency.get(price_bin, 0) + 1
 
+    def get_price_distribution_data(self):
+        if len(self.price_distribution) < 2:
+            return None
+
+        mean = np.mean(self.price_distribution)
+        std = np.std(self.price_distribution)
+        hist, bin_edges = np.histogram(self.price_distribution, bins=self.num_bins, density=True)
+        
+        # Вычисляем нормальное распределение для сравнения
+        x = np.linspace(min(self.price_distribution), max(self.price_distribution), 100)
+        normal_dist = stats.norm.pdf(x, mean, std)
+        
+        # Находим максимальное значение плотности вероятности
+        max_density = max(max(hist), max(normal_dist))
+        
+        # Нормализуем гистограмму и нормальное распределение
+        hist_normalized = hist / max_density
+        normal_dist_normalized = normal_dist / max_density
+
+        return {
+            'hist': hist_normalized.tolist(),
+            'bin_edges': bin_edges.tolist(),
+            'normal_dist': normal_dist_normalized.tolist(),
+            'x': x.tolist(),
+            'current_price': self.current_price
+        }
     def calculate_distribution_coefficient(self):
         if len(self.executed_orders_history) < self.distribution_period:
             return 1.0  # Возвращаем нейтральный коэффициент, если недостаточно данных
@@ -254,7 +281,8 @@ class OrderManager:
         sell_orders = [order for order in self.orders if order.order_type == "sell" and not order.executed]
         
         if hasattr(self.graph, 'set_full_data'):
-            self.graph.set_full_data(price_history, [ema] * len(price_history), buy_orders, sell_orders, self.order_history)
+            distribution_data = self.get_price_distribution_data()
+            self.graph.set_full_data(price_history, [ema] * len(price_history), buy_orders, sell_orders, self.order_history, distribution_data)
             if hasattr(self.graph, 'update_visible_range'):
                 self.graph.update_visible_range(self.graph.data_offset)
         else:
