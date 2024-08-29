@@ -159,9 +159,12 @@ class OrderManager:
         distance_to_max = (hist_max - current_price) / current_price
         distance_to_min = (current_price - hist_min) / current_price
 
+        # # Устанавливаем верхнюю и нижнюю границы сетки
+        # upper_bound = ema * (1 + max(distance_to_min, self.min_grid_coverage))
+        # lower_bound = ema * (1 - max(distance_to_max, self.min_grid_coverage))
         # Устанавливаем верхнюю и нижнюю границы сетки
-        upper_bound = ema * (1 + max(distance_to_min, self.min_grid_coverage))
-        lower_bound = ema * (1 - max(distance_to_max, self.min_grid_coverage))
+        upper_bound = current_price + min_step*self.max_orders
+        lower_bound = current_price - min_step*self.max_orders
 
         # Убедимся, что границы не выходят за исторический диапазон
         upper_bound = min(upper_bound, hist_max)
