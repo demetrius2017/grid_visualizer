@@ -154,9 +154,10 @@ class MarketGraph(QtWidgets.QWidget):
             self.ema_curve.show()
 
 
-    def update_report(self, balance, profit, floating_profit, free_margin):
+    def update_report(self, balance, profit, floating_profit, free_margin, total_commission):
         self.report_label.setText(
-            f"Balance: {balance}, Profit: {profit}, Floating Profit: {floating_profit}, Free Margin: {free_margin}"
+            f"Balance: {balance:.2f}, Profit: {profit:.2f}, Floating Profit: {floating_profit:.2f}, "
+            f"Free Margin: {free_margin:.2f}, Total Commission: {total_commission:.2f}"
         )
 
     def update_orders_table(self, orders):

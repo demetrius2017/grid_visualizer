@@ -99,7 +99,6 @@ class TradingSimulator:
         distribution_data = self.order_manager.get_price_distribution_data()
         self.graph.set_full_data(self.prices, self.ema, buy_orders, sell_orders, self.order_manager.order_history, distribution_data)
 
-        # Обновление таблицы исполненных ордеров и отчетов
         executed_orders = [order for order in self.order_manager.get_order_history() if order.executed]
         self.graph.update_orders_table(executed_orders)
 
@@ -107,14 +106,26 @@ class TradingSimulator:
         self.update_report()
         self.update_positions_window()
 
+    def update_report(self):
+        balance = self.order_manager.get_balance()
+        total_profit = self.order_manager.get_total_profit()
+        floating_profit = self.order_manager.get_floating_profit()
+        free_margin = self.order_manager.get_free_margin()
+        total_commission = self.order_manager.get_total_commission()
+        net_profit = total_profit - total_commission
+
+        self.graph.update_report(balance, net_profit, floating_profit, free_margin, total_commission)
+        self.graph.update_order_history(self.order_manager.get_order_history())
+
     def update_positions_window(self):
         if self.positions_window is None:
             self.positions_window = PositionsWindow()
             self.positions_window.show()
 
         open_positions = self.order_manager.get_open_positions()
-        closed_positions = self.order_manager.get_closed_positions()
+        closed_positions = self.order_manager.get_closed_positions()  # Убедимся, что этот метод существует и работает корректно
         self.positions_window.update_positions(open_positions, closed_positions, self.current_price)
+
 
     def update_balances(self):
         self.balance_history.append(self.order_manager.get_balance())
@@ -130,22 +141,6 @@ class TradingSimulator:
         else:
             print("Cannot initialize grid: EMA not yet calculated")
 
-    def update_report(self):
-        balance = self.order_manager.get_balance()
-        profit = self.order_manager.get_profit()
-        floating_profit = self.order_manager.get_floating_profit()
-        free_margin = self.order_manager.get_free_margin()
-
-        self.graph.update_report(balance, profit, floating_profit, free_margin)
-        self.graph.update_order_history(self.order_manager.get_order_history())
-        # print(f"Balance: {balance}, Profit: {profit}, Floating Profit: {floating_profit}, Free Margin: {free_margin}")
-
-        # Проверка на критические уровни
-        if free_margin < balance * 0.1:  # Если свободная маржа меньше 10% от баланса
-            print("WARNING: Low free margin!")
-        if floating_profit < -balance * 0.05:  # Если плавающий убыток больше 5% от баланса
-            print("WARNING: High floating loss!")
-
     def update_orders_graph(self):
         buy_orders = [
             order.price for order in self.order_manager.orders if order.order_type == "buy" and not order.executed
@@ -154,6 +149,15 @@ class TradingSimulator:
             order.price for order in self.order_manager.orders if order.order_type == "sell" and not order.executed
         ]
         self.graph.update_orders(buy_orders, sell_orders)
+
+    def update_positions_window(self):
+        if self.positions_window is None:
+            self.positions_window = PositionsWindow()
+            self.positions_window.show()
+
+        open_positions = self.order_manager.get_open_positions()
+        closed_positions = self.order_manager.get_closed_positions()
+        self.positions_window.update_positions(open_positions, closed_positions, self.current_price)
 
     def mouse_moved(self, evt):
         pos = evt

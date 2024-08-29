@@ -18,6 +18,7 @@ class Position:
             self.floating_profit = (current_price - self.entry_price) * self.volume
         else:  # sell
             self.floating_profit = (self.entry_price - current_price) * self.volume
+        return self.floating_profit
 
     def close_position(self, exit_price):
         self.exit_price = exit_price
@@ -86,6 +87,8 @@ class OrderManager:
         self.consecutive_sells = 0
         self.base_grid_step = grid_step_percent
         self.max_grid_step_multiplier = 8  # Максимальное увеличение шага сетки
+        self.total_profit = 0
+        self.total_commission = 0
 
     def update_price_distribution(self, price):
         self.price_distribution.append(price)
@@ -368,20 +371,20 @@ class OrderManager:
         if opposite_position:
             profit = opposite_position.close_position(execution_price)
             self.profit += profit
-            self.balance += profit
             self.closed_positions.append(opposite_position)
             self.positions.remove(opposite_position)
             self.initialize_grid()
         else:
             new_position = Position(order.order_type, execution_price, order.volume, self.commission_rate)
             self.positions.append(new_position)
+            self.total_commission += order.commission
+
+        self.update_balance()
 
         if order.order_type == "buy":
-            self.balance -= order.volume * execution_price + order.commission
             self.consecutive_buys += 1
             self.consecutive_sells = 0
         else:  # sell
-            self.balance += order.volume * execution_price - order.commission
             self.consecutive_sells += 1
             self.consecutive_buys = 0
 
@@ -430,31 +433,18 @@ class OrderManager:
         )
         return total_commission
 
-    def calculate_floating_profit(self, current_price):
-        self.floating_profit = sum(pos.floating_profit for pos in self.positions)
-        for position in self.positions:
-            position.update_floating_profit(current_price)
-        # print(f"Floating Profit calculated: {self.floating_profit}")
+    def update_balance(self):
+        self.balance = self.initial_balance + self.total_profit - self.total_commission
 
-    def calculate_unrealized_pnl(self, current_price):
-        unrealized_pnl = 0
-        for order in self.orders:
-            if order.executed:
-                if order.order_type == "buy":
-                    unrealized_pnl += order.volume * (current_price - order.execution_price)
-                else:
-                    unrealized_pnl += order.volume * (order.execution_price - current_price)
-        return unrealized_pnl
+    def calculate_floating_profit(self, current_price):
+        self.floating_profit = sum(pos.update_floating_profit(current_price) for pos in self.positions)
 
     def calculate_free_margin(self):
         total_position_value = sum(pos.volume * self.current_price for pos in self.positions)
         self.free_margin = self.balance - total_position_value
-        # print(f"Total Position Value: {total_position_value}, Free Margin: {self.free_margin}")
 
-    def update_free_margin_after_execution(self):
-        total_executed_order_value = sum(order.price * order.volume for order in self.orders if order.executed)
-        self.free_margin = self.balance + self.floating_profit - total_executed_order_value
-        # print(f"Updated Free Margin: {self.free_margin}")
+    def get_order_history(self):
+        return self.order_history
 
     def get_open_positions(self):
         return self.positions
@@ -462,19 +452,23 @@ class OrderManager:
     def get_closed_positions(self):
         return self.closed_positions
 
-    def get_order_history(self):
-        return self.order_history
+    def get_total_profit(self):
+        self.total_profit = sum(position.profit for position in self.closed_positions)
+        return self.total_profit
+
+    def get_total_commission(self):
+        self.total_commission = sum(position.commission for position in self.closed_positions)
+        return self.total_commission
 
     def get_balance(self):
+        self.update_balance()
         return self.balance
-
-    def get_profit(self):
-        return self.profit
 
     def get_floating_profit(self):
         return self.floating_profit
 
     def get_free_margin(self):
+        self.calculate_free_margin()
         return self.free_margin
 
     def initialize_grid(self):
