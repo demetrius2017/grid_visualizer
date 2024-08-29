@@ -2,6 +2,7 @@ import uuid
 import numpy as np
 from scipy import stats
 
+
 class Position:
     def __init__(self, order_type, price, volume, commission_rate=0.00016):
         self.order_type = order_type
@@ -23,9 +24,13 @@ class Position:
     def close_position(self, exit_price):
         self.exit_price = exit_price
         if self.order_type == "buy":
-            self.profit = (exit_price - self.entry_price) * self.volume - self.commission
+            self.profit = (
+                exit_price - self.entry_price
+            ) * self.volume - self.commission
         else:  # sell
-            self.profit = (self.entry_price - exit_price) * self.volume - self.commission
+            self.profit = (
+                self.entry_price - exit_price
+            ) * self.volume - self.commission
         self.closed = True
         return self.profit
 
@@ -82,7 +87,7 @@ class OrderManager:
         self.num_bins = 50  # Количество столбиков в гистограмме
         self.volume_growth_factor = 1.2  # Коэффициент роста объема ордеров
         self.price_frequency = {}
-                # Новые атрибуты для динамического шага сетки
+        # Новые атрибуты для динамического шага сетки
         self.consecutive_buys = 0
         self.consecutive_sells = 0
         self.base_grid_step = grid_step_percent
@@ -105,26 +110,29 @@ class OrderManager:
 
         mean = np.mean(self.price_distribution)
         std = np.std(self.price_distribution)
-        hist, bin_edges = np.histogram(self.price_distribution, bins=self.num_bins, density=True)
-        
+        hist, bin_edges = np.histogram(
+            self.price_distribution, bins=self.num_bins, density=True
+        )
+
         # Вычисляем нормальное распределение для сравнения
         x = np.linspace(min(self.price_distribution), max(self.price_distribution), 100)
         normal_dist = stats.norm.pdf(x, mean, std)
-        
+
         # Находим максимальное значение плотности вероятности
         max_density = max(max(hist), max(normal_dist))
-        
+
         # Нормализуем гистограмму и нормальное распределение
         hist_normalized = hist / max_density
         normal_dist_normalized = normal_dist / max_density
 
         return {
-            'hist': hist_normalized.tolist(),
-            'bin_edges': bin_edges.tolist(),
-            'normal_dist': normal_dist_normalized.tolist(),
-            'x': x.tolist(),
-            'current_price': self.current_price
+            "hist": hist_normalized.tolist(),
+            "bin_edges": bin_edges.tolist(),
+            "normal_dist": normal_dist_normalized.tolist(),
+            "x": x.tolist(),
+            "current_price": self.current_price,
         }
+
     def calculate_distribution_coefficient(self):
         if len(self.executed_orders_history) < self.distribution_period:
             return 1.0  # Возвращаем нейтральный коэффициент, если недостаточно данных
@@ -166,8 +174,8 @@ class OrderManager:
         # upper_bound = ema * (1 + max(distance_to_min, self.min_grid_coverage))
         # lower_bound = ema * (1 - max(distance_to_max, self.min_grid_coverage))
         # Устанавливаем верхнюю и нижнюю границы сетки
-        upper_bound = current_price + min_step*self.max_orders
-        lower_bound = current_price - min_step*self.max_orders
+        upper_bound = current_price + min_step * self.max_orders
+        lower_bound = current_price - min_step * self.max_orders
 
         # Убедимся, что границы не выходят за исторический диапазон
         upper_bound = min(upper_bound, hist_max)
@@ -200,21 +208,40 @@ class OrderManager:
             #     f"Placed {order_type} order at {price} for {volume} units. Estimated commission: {estimated_commission:.8f}"
             # )
         else:
-            print(f"Insufficient margin to place {order_type} order at {price} for {volume} units.")
+            print(
+                f"Insufficient margin to place {order_type} order at {price} for {volume} units."
+            )
 
-    def create_asymmetric_grid(self, ema, current_price, lower_bound, upper_bound, buy_step, sell_step, num_levels=10):
+    def create_asymmetric_grid(
+        self,
+        ema,
+        current_price,
+        lower_bound,
+        upper_bound,
+        buy_step,
+        sell_step,
+        num_levels=10,
+    ):
         buy_range = ema - lower_bound
         sell_range = upper_bound - ema
 
         buy_levels = int(num_levels * (buy_range / (buy_range + sell_range)))
         sell_levels = num_levels - buy_levels
 
-        buy_prices = np.linspace(lower_bound, min(ema, current_price), buy_levels + 1)[:-1]
-        sell_prices = np.linspace(max(ema, current_price), upper_bound, sell_levels + 1)[1:]
+        buy_prices = np.linspace(lower_bound, min(ema, current_price), buy_levels + 1)[
+            :-1
+        ]
+        sell_prices = np.linspace(
+            max(ema, current_price), upper_bound, sell_levels + 1
+        )[1:]
 
         # Применяем динамический шаг к ценам
-        buy_prices = [current_price * (1 - (i + 1) * buy_step / 100) for i in range(buy_levels)]
-        sell_prices = [current_price * (1 + (i + 1) * sell_step / 100) for i in range(sell_levels)]
+        buy_prices = [
+            current_price * (1 - (i + 1) * buy_step / 100) for i in range(buy_levels)
+        ]
+        sell_prices = [
+            current_price * (1 + (i + 1) * sell_step / 100) for i in range(sell_levels)
+        ]
 
         return buy_prices, sell_prices
 
@@ -238,7 +265,7 @@ class OrderManager:
             self.orders.append(order)
             self.free_margin -= required_margin + estimated_commission
             # print(
-                # f"Placed {order_type} order at {price} for {volume} units. Estimated commission: {estimated_commission:.8f}"
+            # f"Placed {order_type} order at {price} for {volume} units. Estimated commission: {estimated_commission:.8f}"
             # )
             return True
         else:
@@ -253,7 +280,9 @@ class OrderManager:
         sell_step = self.calculate_dynamic_grid_step("sell")
 
         # Генерируем цены для покупки и продажи с учетом динамических шагов
-        buy_prices, sell_prices = self.create_asymmetric_grid(ema, current_price, lower_bound, upper_bound, buy_step, sell_step)
+        buy_prices, sell_prices = self.create_asymmetric_grid(
+            ema, current_price, lower_bound, upper_bound, buy_step, sell_step
+        )
 
         base_volume = self.calculate_base_volume(current_price)
 
@@ -270,21 +299,40 @@ class OrderManager:
             self.place_order("sell", price, volume)
 
         # Проверяем, достаточно ли свободной маржи
-        total_margin_required = sum([order.price * order.volume for order in self.orders if not order.executed])
-        if total_margin_required > self.free_margin:
+        total_margin_required = sum(
+            [order.price * order.volume for order in self.orders if not order.executed]
+        )
+
+        # Add this check to avoid division by zero
+        if total_margin_required > 0 and total_margin_required > self.free_margin:
             volume_adjustment = self.free_margin / total_margin_required
             for order in self.orders:
                 if not order.executed:
                     order.volume *= volume_adjustment
 
         # Обновляем график
-        buy_orders = [order for order in self.orders if order.order_type == "buy" and not order.executed]
-        sell_orders = [order for order in self.orders if order.order_type == "sell" and not order.executed]
+        buy_orders = [
+            order
+            for order in self.orders
+            if order.order_type == "buy" and not order.executed
+        ]
+        sell_orders = [
+            order
+            for order in self.orders
+            if order.order_type == "sell" and not order.executed
+        ]
 
-        if hasattr(self.graph, 'set_full_data'):
+        if hasattr(self.graph, "set_full_data"):
             distribution_data = self.get_price_distribution_data()
-            self.graph.set_full_data(price_history, [ema] * len(price_history), buy_orders, sell_orders, self.order_history, distribution_data)
-            if hasattr(self.graph, 'update_visible_range'):
+            self.graph.set_full_data(
+                price_history,
+                [ema] * len(price_history),
+                buy_orders,
+                sell_orders,
+                self.order_history,
+                distribution_data,
+            )
+            if hasattr(self.graph, "update_visible_range"):
                 self.graph.update_visible_range(self.graph.data_offset)
         else:
             # Fallback to old update method if set_full_data is not available
@@ -294,23 +342,33 @@ class OrderManager:
         for order in self.orders:
             if not order.executed:
                 if order.order_type == "buy" and order.price > current_price:
-                    new_price = min(order.price, ema * (1 - self.grid_step_percent / 100))
+                    new_price = min(
+                        order.price, ema * (1 - self.grid_step_percent / 100)
+                    )
                     order.price = new_price
                     # print(f"Updated buy order {order.id} price to {new_price}")
                 elif order.order_type == "sell" and order.price < current_price:
-                    new_price = max(order.price, ema * (1 + self.grid_step_percent / 100))
+                    new_price = max(
+                        order.price, ema * (1 + self.grid_step_percent / 100)
+                    )
                     order.price = new_price
                     # print(f"Updated sell order {order.id} price to {new_price}")
 
     def calculate_base_volume(self, current_price):
-        return self.free_margin * 0.01 / current_price  # Используем 1% свободной маржи для базового объема
+        return (
+            self.free_margin * 0.01 / current_price
+        )  # Используем 1% свободной маржи для базового объема
 
     def calculate_order_volume(self, current_price):
         # Рассчитываем общий объем для всей сетки
-        total_volume = self.free_margin * 0.5 / current_price  # Используем 50% свободной маржи для всей сетки
+        total_volume = (
+            self.free_margin * 0.5 / current_price
+        )  # Используем 50% свободной маржи для всей сетки
 
         # Делим общий объем на количество уровней сетки
-        volume_per_level = total_volume / (self.grid_size * 2)  # Умножаем на 2, так как у нас buy и sell ордера
+        volume_per_level = total_volume / (
+            self.grid_size * 2
+        )  # Умножаем на 2, так как у нас buy и sell ордера
 
         return volume_per_level
 
@@ -321,14 +379,22 @@ class OrderManager:
         self.update_price_distribution(current_price)
         # print(f"Checking orders at current price: {current_price}")
 
-        last_price = self.price_history[-2] if len(self.price_history) > 1 else self.current_price
+        last_price = (
+            self.price_history[-2]
+            if len(self.price_history) > 1
+            else self.current_price
+        )
         price_range = sorted([last_price, current_price])
 
         orders_executed = False
         for order in self.orders[:]:  # Используем копию списка
             if not order.executed:
-                if (order.order_type == "buy" and price_range[0] <= order.price <= price_range[1]) or (
-                    order.order_type == "sell" and price_range[0] <= order.price <= price_range[1]
+                if (
+                    order.order_type == "buy"
+                    and price_range[0] <= order.price <= price_range[1]
+                ) or (
+                    order.order_type == "sell"
+                    and price_range[0] <= order.price <= price_range[1]
                 ):
                     # print(f"Executing order: {order.id}")
                     self.execute_order(order, order.price)
@@ -338,8 +404,16 @@ class OrderManager:
             self.update_display()
 
         # Проверяем, нужно ли обновить сетку
-        buy_orders = [order for order in self.orders if order.order_type == "buy" and not order.executed]
-        sell_orders = [order for order in self.orders if order.order_type == "sell" and not order.executed]
+        buy_orders = [
+            order
+            for order in self.orders
+            if order.order_type == "buy" and not order.executed
+        ]
+        sell_orders = [
+            order
+            for order in self.orders
+            if order.order_type == "sell" and not order.executed
+        ]
         total_orders = len(buy_orders) + len(sell_orders)
 
         should_update_grid = False
@@ -348,7 +422,10 @@ class OrderManager:
             # print("No open orders. Initializing grid.")
             should_update_grid = True
         elif total_orders > 0:
-            if len(buy_orders) <= total_orders * 0.2 or len(sell_orders) <= total_orders * 0.2:
+            if (
+                len(buy_orders) <= total_orders * 0.2
+                or len(sell_orders) <= total_orders * 0.2
+            ):
                 # print("Low order count on one side. Updating grid.")
                 should_update_grid = True
 
@@ -366,7 +443,9 @@ class OrderManager:
         order.commission = order.volume * execution_price * self.commission_rate
         order.execution_time = len(self.price_history) - 1
 
-        opposite_position = next((pos for pos in self.positions if pos.order_type != order.order_type), None)
+        opposite_position = next(
+            (pos for pos in self.positions if pos.order_type != order.order_type), None
+        )
 
         if opposite_position:
             profit = opposite_position.close_position(execution_price)
@@ -375,7 +454,9 @@ class OrderManager:
             self.positions.remove(opposite_position)
             self.initialize_grid()
         else:
-            new_position = Position(order.order_type, execution_price, order.volume, self.commission_rate)
+            new_position = Position(
+                order.order_type, execution_price, order.volume, self.commission_rate
+            )
             self.positions.append(new_position)
             self.total_commission += order.commission
 
@@ -394,8 +475,14 @@ class OrderManager:
         new_grid_step = self.calculate_dynamic_grid_step(order.order_type)
 
         # Размещаем новый ордер с учетом нового шага сетки
-        new_price = execution_price * (1 + new_grid_step / 100 if order.order_type == "buy" else 1 - new_grid_step / 100)
-        self.place_order("sell" if order.order_type == "buy" else "buy", new_price, order.volume)
+        new_price = execution_price * (
+            1 + new_grid_step / 100
+            if order.order_type == "buy"
+            else 1 - new_grid_step / 100
+        )
+        self.place_order(
+            "sell" if order.order_type == "buy" else "buy", new_price, order.volume
+        )
 
         self.executed_orders_history.append(order)
         if len(self.executed_orders_history) > self.distribution_period * 2:
@@ -408,10 +495,10 @@ class OrderManager:
 
     def calculate_dynamic_grid_step(self, order_type):
         if order_type == "buy":
-            multiplier = min(2 ** self.consecutive_buys, self.max_grid_step_multiplier)
+            multiplier = min(2**self.consecutive_buys, self.max_grid_step_multiplier)
         else:  # sell
-            multiplier = min(2 ** self.consecutive_sells, self.max_grid_step_multiplier)
-        
+            multiplier = min(2**self.consecutive_sells, self.max_grid_step_multiplier)
+
         return self.base_grid_step * multiplier
 
     def initialize_grid(self):
@@ -429,7 +516,9 @@ class OrderManager:
     def calculate_total_commission(self):
         total_commission = sum(order.commission for order in self.executed_orders)
         total_commission += sum(
-            order.volume * order.price * order.commission_rate for order in self.orders if not order.executed
+            order.volume * order.price * order.commission_rate
+            for order in self.orders
+            if not order.executed
         )
         return total_commission
 
@@ -437,10 +526,14 @@ class OrderManager:
         self.balance = self.initial_balance + self.total_profit - self.total_commission
 
     def calculate_floating_profit(self, current_price):
-        self.floating_profit = sum(pos.update_floating_profit(current_price) for pos in self.positions)
+        self.floating_profit = sum(
+            pos.update_floating_profit(current_price) for pos in self.positions
+        )
 
     def calculate_free_margin(self):
-        total_position_value = sum(pos.volume * self.current_price for pos in self.positions)
+        total_position_value = sum(
+            pos.volume * self.current_price for pos in self.positions
+        )
         self.free_margin = self.balance - total_position_value
 
     def get_order_history(self):
@@ -457,7 +550,9 @@ class OrderManager:
         return self.total_profit
 
     def get_total_commission(self):
-        self.total_commission = sum(position.commission for position in self.closed_positions)
+        self.total_commission = sum(
+            position.commission for position in self.closed_positions
+        )
         return self.total_commission
 
     def get_balance(self):
