@@ -9,10 +9,10 @@ class TradingSimulator:
         self,
         graph,
         initial_balance=10000,
-        commission_rate=0.001,
+        commission_rate=0.16/100,
         grid_size=10,
         ema_period=20,
-        min_grid_coverage=0.3,
+        min_grid_coverage=0.05,
         min_orders=20,
         max_orders=50,
     ):

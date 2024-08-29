@@ -49,9 +49,9 @@ class OrderManager:
         commission_rate,
         grid_size,
         graph,
-        grid_step_percent=1.0,
-        min_grid_coverage=0.3,
-        min_orders=20,
+        grid_step_percent=0.05,
+        min_grid_coverage=0.05,
+        min_orders=5,
         max_orders=50,
     ):
         # ... (оставьте существующую инициализацию)
@@ -373,6 +373,7 @@ class OrderManager:
             self.balance += profit
             self.closed_positions.append(opposite_position)
             self.positions.remove(opposite_position)
+            self.initialize_grid()
         else:
             new_position = Position(order.order_type, execution_price, order.volume, self.commission_rate)
             self.positions.append(new_position)
