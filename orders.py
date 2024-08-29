@@ -49,10 +49,10 @@ class OrderManager:
         commission_rate,
         grid_size,
         graph,
-        grid_step_percent=0.05,
+        grid_step_percent=0.8,
         min_grid_coverage=0.05,
-        min_orders=5,
-        max_orders=50,
+        min_orders=2,
+        max_orders=6,
     ):
         # ... (оставьте существующую инициализацию)
         self.initial_balance = initial_balance
@@ -81,6 +81,11 @@ class OrderManager:
         self.num_bins = 50  # Количество столбиков в гистограмме
         self.volume_growth_factor = 1.2  # Коэффициент роста объема ордеров
         self.price_frequency = {}
+                # Новые атрибуты для динамического шага сетки
+        self.consecutive_buys = 0
+        self.consecutive_sells = 0
+        self.base_grid_step = grid_step_percent
+        self.max_grid_step_multiplier = 8  # Максимальное увеличение шага сетки
 
     def update_price_distribution(self, price):
         self.price_distribution.append(price)
@@ -191,19 +196,19 @@ class OrderManager:
         else:
             print(f"Insufficient margin to place {order_type} order at {price} for {volume} units.")
 
-    def create_asymmetric_grid(self, ema, current_price, lower_bound, upper_bound, num_levels=10):
+    def create_asymmetric_grid(self, ema, current_price, lower_bound, upper_bound, buy_step, sell_step, num_levels=10):
         buy_range = ema - lower_bound
         sell_range = upper_bound - ema
 
-        if buy_range > sell_range:
-            buy_levels = int(num_levels * (buy_range / (buy_range + sell_range)))
-            sell_levels = num_levels - buy_levels
-        else:
-            sell_levels = int(num_levels * (sell_range / (buy_range + sell_range)))
-            buy_levels = num_levels - sell_levels
+        buy_levels = int(num_levels * (buy_range / (buy_range + sell_range)))
+        sell_levels = num_levels - buy_levels
 
         buy_prices = np.linspace(lower_bound, min(ema, current_price), buy_levels + 1)[:-1]
         sell_prices = np.linspace(max(ema, current_price), upper_bound, sell_levels + 1)[1:]
+
+        # Применяем динамический шаг к ценам
+        buy_prices = [current_price * (1 - (i + 1) * buy_step / 100) for i in range(buy_levels)]
+        sell_prices = [current_price * (1 + (i + 1) * sell_step / 100) for i in range(sell_levels)]
 
         return buy_prices, sell_prices
 
@@ -237,22 +242,12 @@ class OrderManager:
     def update_grid(self, ema, current_price, price_history):
         lower_bound, upper_bound = self.calculate_grid_boundaries(ema, price_history)
 
-        # Рассчитываем минимальный шаг сетки на основе заданного процента
-        min_step = current_price * (self.grid_step_percent / 100)
+        # Рассчитываем динамические шаги сетки для покупок и продаж
+        buy_step = self.calculate_dynamic_grid_step("buy")
+        sell_step = self.calculate_dynamic_grid_step("sell")
 
-        # Рассчитываем количество ордеров для каждой стороны
-        total_orders = min(max(int(self.grid_size), self.min_orders * 2), self.max_orders * 2)
-        max_orders_per_side = (upper_bound - lower_bound) / min_step / 2
-
-        if max_orders_per_side < self.min_orders:
-            range_extension = (self.min_orders * min_step * 2 - (upper_bound - lower_bound)) / 2
-            lower_bound -= range_extension
-            upper_bound += range_extension
-
-        buy_orders = sell_orders = min(int(max_orders_per_side), total_orders // 2)
-
-        # Генерируем цены для покупки и продажи
-        buy_prices, sell_prices = self.create_asymmetric_grid(ema, current_price, lower_bound, upper_bound)
+        # Генерируем цены для покупки и продажи с учетом динамических шагов
+        buy_prices, sell_prices = self.create_asymmetric_grid(ema, current_price, lower_bound, upper_bound, buy_step, sell_step)
 
         base_volume = self.calculate_base_volume(current_price)
 
@@ -279,7 +274,7 @@ class OrderManager:
         # Обновляем график
         buy_orders = [order for order in self.orders if order.order_type == "buy" and not order.executed]
         sell_orders = [order for order in self.orders if order.order_type == "sell" and not order.executed]
-        
+
         if hasattr(self.graph, 'set_full_data'):
             distribution_data = self.get_price_distribution_data()
             self.graph.set_full_data(price_history, [ema] * len(price_history), buy_orders, sell_orders, self.order_history, distribution_data)
@@ -380,14 +375,20 @@ class OrderManager:
 
         if order.order_type == "buy":
             self.balance -= order.volume * execution_price + order.commission
+            self.consecutive_buys += 1
+            self.consecutive_sells = 0
         else:  # sell
             self.balance += order.volume * execution_price - order.commission
+            self.consecutive_sells += 1
+            self.consecutive_buys = 0
 
         self.calculate_free_margin()
 
-        new_price = execution_price * (
-            1 + self.grid_step_percent / 100 if order.order_type == "buy" else 1 - self.grid_step_percent / 100
-        )
+        # Рассчитываем новый шаг сетки
+        new_grid_step = self.calculate_dynamic_grid_step(order.order_type)
+
+        # Размещаем новый ордер с учетом нового шага сетки
+        new_price = execution_price * (1 + new_grid_step / 100 if order.order_type == "buy" else 1 - new_grid_step / 100)
         self.place_order("sell" if order.order_type == "buy" else "buy", new_price, order.volume)
 
         self.executed_orders_history.append(order)
@@ -398,6 +399,14 @@ class OrderManager:
         self.orders.remove(order)
         if order not in self.order_history:
             self.order_history.append(order)
+
+    def calculate_dynamic_grid_step(self, order_type):
+        if order_type == "buy":
+            multiplier = min(2 ** self.consecutive_buys, self.max_grid_step_multiplier)
+        else:  # sell
+            multiplier = min(2 ** self.consecutive_sells, self.max_grid_step_multiplier)
+        
+        return self.base_grid_step * multiplier
 
     def initialize_grid(self):
         if self.current_ema is not None and len(self.price_history) > 0:

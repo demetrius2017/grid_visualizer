@@ -13,8 +13,8 @@ class TradingSimulator:
         grid_size=10,
         ema_period=20,
         min_grid_coverage=0.05,
-        min_orders=20,
-        max_orders=50,
+        min_orders=2,
+        max_orders=6,
     ):
         self.graph = graph
         self.current_price = 0.5
