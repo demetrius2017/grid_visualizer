@@ -52,7 +52,9 @@ class MarketGraph(QtWidgets.QWidget):
         # Таблица ордеров
         self.orders_table = QtWidgets.QTableWidget()
         self.orders_table.setColumnCount(6)
-        self.orders_table.setHorizontalHeaderLabels(["ID", "Price", "Direction", "Commission", "Volume", "Profit"])
+        self.orders_table.setHorizontalHeaderLabels(
+            ["ID", "Price", "Direction", "Commission", "Volume", "Profit"]
+        )
         splitter.addWidget(self.orders_table)
 
         # Добавляем splitter в основной layout
@@ -74,7 +76,9 @@ class MarketGraph(QtWidgets.QWidget):
         self.sell_orders_curve = pg.ScatterPlotItem(
             pen=pg.mkPen("r"), brush=pg.mkBrush(255, 0, 0, 120), symbol="t", size=10
         )
-        self.order_history_curve = pg.ScatterPlotItem(pen=pg.mkPen(None), symbol="o", size=5)
+        self.order_history_curve = pg.ScatterPlotItem(
+            pen=pg.mkPen(None), symbol="o", size=5
+        )
         self.graphWidget.addItem(self.buy_orders_curve)
         self.graphWidget.addItem(self.sell_orders_curve)
         self.graphWidget.addItem(self.order_history_curve)
@@ -84,57 +88,79 @@ class MarketGraph(QtWidgets.QWidget):
         self.graphWidget.setAutoVisible(y=True)
 
         # Инициализация элементов графика баланса
-        self.balance_curve = self.balance_graph.plot(pen=pg.mkPen("g", width=1), name="Balance")
-        self.free_margin_curve = self.balance_graph.plot(pen=pg.mkPen("b", width=1), name="Free Margin")
-        self.margin_curve = self.balance_graph.plot(pen=pg.mkPen("r", width=1), name="Margin")
+        self.balance_curve = self.balance_graph.plot(
+            pen=pg.mkPen("g", width=1), name="Balance"
+        )
+        self.free_margin_curve = self.balance_graph.plot(
+            pen=pg.mkPen("b", width=1), name="Free Margin"
+        )
+        self.margin_curve = self.balance_graph.plot(
+            pen=pg.mkPen("r", width=1), name="Margin"
+        )
         # Инициализация элементов гистограммы
-        self.histogram_bars = pg.BarGraphItem(x=[], height=[], width=0.8, brush='g')
-        self.normal_curve = self.distribution_graph.plot(pen='r')
-        self.current_price_line_hist = pg.InfiniteLine(angle=90, movable=False, pen='b')
+        self.histogram_bars = pg.BarGraphItem(x=[], height=[], width=0.8, brush="g")
+        self.normal_curve = self.distribution_graph.plot(pen="r")
+        self.current_price_line_hist = pg.InfiniteLine(angle=90, movable=False, pen="b")
         self.distribution_graph.addItem(self.histogram_bars)
         self.distribution_graph.addItem(self.current_price_line_hist)
 
     def update_distribution_chart(self):
         if self.distribution_data:
-            hist = self.distribution_data['hist']
-            bin_edges = self.distribution_data['bin_edges']
-            normal_dist = self.distribution_data['normal_dist']
-            x = self.distribution_data['x']
-            current_price = self.distribution_data['current_price']
+            hist = self.distribution_data["hist"]
+            bin_edges = self.distribution_data["bin_edges"]
+            normal_dist = self.distribution_data["normal_dist"]
+            x = self.distribution_data["x"]
+            current_price = self.distribution_data["current_price"]
 
             # Очищаем график перед обновлением
             self.distribution_graph.clear()
 
             # Создаем новый BarGraphItem для гистограммы
-            bar_positions = [(bin_edges[i] + bin_edges[i+1])/2 for i in range(len(bin_edges)-1)]
-            colors = ['g' if abs(h - n) <= 0.2 else 'r' for h, n in zip(hist, normal_dist)]
-            
+            bar_positions = [
+                (bin_edges[i] + bin_edges[i + 1]) / 2 for i in range(len(bin_edges) - 1)
+            ]
+            colors = [
+                "g" if abs(h - n) <= 0.2 else "r" for h, n in zip(hist, normal_dist)
+            ]
+
             # Нормализуем высоту столбцов гистограммы
             max_height = max(max(hist), max(normal_dist))
             normalized_hist = [h / max_height for h in hist]
-            
-            self.histogram_bars = pg.BarGraphItem(x=bar_positions, height=normalized_hist, width=(bin_edges[1]-bin_edges[0])*0.8, brushes=colors)
+
+            self.histogram_bars = pg.BarGraphItem(
+                x=bar_positions,
+                height=normalized_hist,
+                width=(bin_edges[1] - bin_edges[0]) * 0.8,
+                brushes=colors,
+            )
             self.distribution_graph.addItem(self.histogram_bars)
 
             # Обновляем нормальную кривую
             normalized_normal_dist = [n / max_height for n in normal_dist]
-            self.normal_curve = self.distribution_graph.plot(x, normalized_normal_dist, pen=pg.mkPen('r', width=2))
+            self.normal_curve = self.distribution_graph.plot(
+                x, normalized_normal_dist, pen=pg.mkPen("r", width=2)
+            )
 
             # Обновляем линию текущей цены
-            self.current_price_line_hist = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('b', width=2))
+            self.current_price_line_hist = pg.InfiniteLine(
+                angle=90, movable=False, pen=pg.mkPen("b", width=2)
+            )
             self.distribution_graph.addItem(self.current_price_line_hist)
             self.current_price_line_hist.setValue(current_price)
 
             # Настраиваем оси
-            self.distribution_graph.setLabel('left', 'Normalized Frequency')
-            self.distribution_graph.setLabel('bottom', 'Price')
+            self.distribution_graph.setLabel("left", "Normalized Frequency")
+            self.distribution_graph.setLabel("bottom", "Price")
 
             # Устанавливаем диапазон осей
             x_min, x_max = min(bin_edges), max(bin_edges)
             x_range = x_max - x_min
-            self.distribution_graph.setXRange(x_min - 0.1*x_range, x_max + 0.1*x_range)
-            self.distribution_graph.setYRange(0, 1.1)  # Нормализованный диапазон от 0 до 1
-
+            self.distribution_graph.setXRange(
+                x_min - 0.1 * x_range, x_max + 0.1 * x_range
+            )
+            self.distribution_graph.setYRange(
+                0, 1.1
+            )  # Нормализованный диапазон от 0 до 1
 
     def update_graph(self, price_data):
         if len(price_data) > self.visible_range:
@@ -143,46 +169,72 @@ class MarketGraph(QtWidgets.QWidget):
         else:
             self.scroll_bar.setMaximum(0)
 
-        visible_data = price_data[self.data_offset : self.data_offset + self.visible_range]
+        visible_data = price_data[
+            self.data_offset : self.data_offset + self.visible_range
+        ]
         self.price_curve.setData(range(len(visible_data)), visible_data)
         self.graphWidget.setXRange(0, len(visible_data))
 
     def update_ema(self, ema_data):
         if ema_data:
-            visible_ema = ema_data[self.data_offset : self.data_offset + self.visible_range]
+            visible_ema = ema_data[
+                self.data_offset : self.data_offset + self.visible_range
+            ]
             self.ema_curve.setData(range(len(visible_ema)), visible_ema)
             self.ema_curve.show()
 
-
-    def update_report(self, balance, profit, floating_profit, free_margin, total_commission):
+    def update_report(
+        self, balance, profit, floating_profit, free_margin, total_commission, hedge_metrics
+    ):
+        """
+        Обновленный отчет с информацией о хедже
+        """
         self.report_label.setText(
-            f"Balance: {balance:.2f}, Profit: {profit:.2f}, Floating Profit: {floating_profit:.2f}, "
-            f"Free Margin: {free_margin:.2f}, Total Commission: {total_commission:.2f}"
+            f"Balance: {balance:.2f}, Profit: {profit:.2f}, "
+            f"Floating Profit: {floating_profit:.2f}, "
+            f"Free Margin: {free_margin:.2f}, "
+            f"Total Commission: {total_commission:.2f}"
         )
 
     def update_orders_table(self, orders):
         self.orders_table.setRowCount(len(orders))
         for i, order in enumerate(orders):
             self.orders_table.setItem(i, 0, QtWidgets.QTableWidgetItem(str(order.id)))
-            self.orders_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{order.price:.8f}"))
-            self.orders_table.setItem(i, 2, QtWidgets.QTableWidgetItem(order.order_type))
-            self.orders_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{order.commission:.8f}"))
-            self.orders_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{order.volume:.8f}"))
-            self.orders_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{order.profit:.8f}"))
+            self.orders_table.setItem(
+                i, 1, QtWidgets.QTableWidgetItem(f"{order.price:.8f}")
+            )
+            self.orders_table.setItem(
+                i, 2, QtWidgets.QTableWidgetItem(order.order_type)
+            )
+            self.orders_table.setItem(
+                i, 3, QtWidgets.QTableWidgetItem(f"{order.commission:.8f}")
+            )
+            self.orders_table.setItem(
+                i, 4, QtWidgets.QTableWidgetItem(f"{order.volume:.8f}")
+            )
+            self.orders_table.setItem(
+                i, 5, QtWidgets.QTableWidgetItem(f"{order.profit:.8f}")
+            )
 
-    def update_balance_graph(self, balance_history, free_margin_history, margin_history):
+    def update_balance_graph(
+        self, balance_history, free_margin_history, margin_history
+    ):
         if balance_history and free_margin_history and margin_history:
             x = list(range(len(balance_history)))
             self.balance_curve.setData(x, balance_history)
             self.free_margin_curve.setData(x, free_margin_history)
             self.margin_curve.setData(x, margin_history)
-            
+
             # Обновляем диапазон осей
             self.balance_graph.setXRange(0, len(balance_history))
-            min_y = min(min(balance_history), min(free_margin_history), min(margin_history))
-            max_y = max(max(balance_history), max(free_margin_history), max(margin_history))
+            min_y = min(
+                min(balance_history), min(free_margin_history), min(margin_history)
+            )
+            max_y = max(
+                max(balance_history), max(free_margin_history), max(margin_history)
+            )
             self.balance_graph.setYRange(min_y, max_y)
-            
+
             # Принудительно обновляем график
             self.balance_graph.update()
 
@@ -207,23 +259,28 @@ class MarketGraph(QtWidgets.QWidget):
 
         end = min(self.data_offset + self.visible_range, len(self.full_price_data))
         start = max(0, end - self.visible_range)
-        
+
         visible_data = self.full_price_data[start:end]
         self.price_curve.setData(range(start, end), visible_data)
-        
+
         if self.full_ema_data:
             visible_ema = self.full_ema_data[start:end]
             self.ema_curve.setData(range(start, end), visible_ema)
 
         self.graphWidget.setXRange(start, end)
-        
-        self.update_order_book(self.full_buy_orders, self.full_sell_orders, end - 1, self.full_price_data[-1])
+
+        self.update_order_book(
+            self.full_buy_orders,
+            self.full_sell_orders,
+            end - 1,
+            self.full_price_data[-1],
+        )
         self.update_order_history(self.full_order_history)
 
     def update_order_book(self, buy_orders, sell_orders, current_time, current_price):
         # Фильтруем ордера в видимом диапазоне
-        visible_buy_orders = buy_orders[-self.visible_range:]
-        visible_sell_orders = sell_orders[-self.visible_range:]
+        visible_buy_orders = buy_orders[-self.visible_range :]
+        visible_sell_orders = sell_orders[-self.visible_range :]
 
         buy_positions = []
         sell_positions = []
@@ -239,13 +296,17 @@ class MarketGraph(QtWidgets.QWidget):
 
         # Обновляем линию текущей цены
         if self.current_price_line is None:
-            self.current_price_line = pg.InfiniteLine(pos=current_time, angle=90, pen=pg.mkPen("w", width=1))
+            self.current_price_line = pg.InfiniteLine(
+                pos=current_time, angle=90, pen=pg.mkPen("w", width=1)
+            )
             self.graphWidget.addItem(self.current_price_line)
         else:
             self.current_price_line.setValue(current_time)
 
         # Обновляем диапазон осей Y
-        all_prices = [order.price for order in visible_buy_orders + visible_sell_orders] + [current_price]
+        all_prices = [
+            order.price for order in visible_buy_orders + visible_sell_orders
+        ] + [current_price]
         if all_prices:
             min_price = min(all_prices)
             max_price = max(all_prices)
@@ -254,19 +315,31 @@ class MarketGraph(QtWidgets.QWidget):
             self.graphWidget.setYRange(min_price - padding, max_price + padding)
 
     def update_order_history(self, order_history):
-        visible_history = order_history[-self.visible_range:]
+        visible_history = order_history[-self.visible_range :]
         history_spots = []
         for order in visible_history:
             if order.executed:
                 spot = {
                     "pos": (order.execution_time, order.execution_price),
                     "data": 1,
-                    "brush": pg.mkBrush("g") if order.order_type == "buy" else pg.mkBrush("r"),
+                    "brush": (
+                        pg.mkBrush("g")
+                        if order.order_type == "buy"
+                        else pg.mkBrush("r")
+                    ),
                 }
                 history_spots.append(spot)
         self.order_history_curve.setData(history_spots)
 
-    def set_full_data(self, price_data, ema_data, buy_orders, sell_orders, order_history, distribution_data):
+    def set_full_data(
+        self,
+        price_data,
+        ema_data,
+        buy_orders,
+        sell_orders,
+        order_history,
+        distribution_data,
+    ):
         self.full_price_data = price_data
         self.full_ema_data = ema_data
         self.full_buy_orders = buy_orders
@@ -285,3 +358,51 @@ class MarketGraph(QtWidgets.QWidget):
 
         self.distribution_data = distribution_data
         self.update_distribution_chart()
+
+    def update_hedge_info(self, active_options, current_price):
+        """
+        Обновление информации о хеджирующих позициях
+        """
+        self.hedge_table.setRowCount(len(active_options) * 2)  # 2 опциона на позицию
+
+        row = 0
+        for position in active_options:
+            # Put option
+            self.hedge_table.setItem(row, 0, QtWidgets.QTableWidgetItem("Put"))
+            self.hedge_table.setItem(
+                row, 1, QtWidgets.QTableWidgetItem(f"{position['put']['strike']:.8f}")
+            )
+            self.hedge_table.setItem(
+                row, 2, QtWidgets.QTableWidgetItem(f"{position['put']['premium']:.8f}")
+            )
+            self.hedge_table.setItem(
+                row,
+                3,
+                QtWidgets.QTableWidgetItem(f"{position['put']['expiry']*365:.1f} days"),
+            )
+            put_value = max(0, position["put"]["strike"] - current_price)
+            self.hedge_table.setItem(
+                row, 4, QtWidgets.QTableWidgetItem(f"{put_value:.8f}")
+            )
+
+            # Call option
+            row += 1
+            self.hedge_table.setItem(row, 0, QtWidgets.QTableWidgetItem("Call"))
+            self.hedge_table.setItem(
+                row, 1, QtWidgets.QTableWidgetItem(f"{position['call']['strike']:.8f}")
+            )
+            self.hedge_table.setItem(
+                row, 2, QtWidgets.QTableWidgetItem(f"{position['call']['premium']:.8f}")
+            )
+            self.hedge_table.setItem(
+                row,
+                3,
+                QtWidgets.QTableWidgetItem(
+                    f"{position['call']['expiry']*365:.1f} days"
+                ),
+            )
+            call_value = max(0, current_price - position["call"]["strike"])
+            self.hedge_table.setItem(
+                row, 4, QtWidgets.QTableWidgetItem(f"{call_value:.8f}")
+            )
+            row += 1

@@ -1,6 +1,7 @@
 import uuid
 import numpy as np
 from scipy import stats
+from options_manager import OptionsManager
 
 
 class Position:
@@ -55,12 +56,11 @@ class OrderManager:
         commission_rate,
         grid_size,
         graph,
-        grid_step_percent=0.8,
-        min_grid_coverage=0.05,
-        min_orders=2,
-        max_orders=6,
+        grid_step_percent=0.2,
+        min_grid_coverage=0.20,
+        min_orders=20,
+        max_orders=50,
     ):
-        # ... (оставьте существующую инициализацию)
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.commission_rate = commission_rate
@@ -94,6 +94,11 @@ class OrderManager:
         self.max_grid_step_multiplier = 8  # Максимальное увеличение шага сетки
         self.total_profit = 0
         self.total_commission = 0
+        # Существующая инициализация...
+        self.options_manager = OptionsManager(commission_rate)
+        self.hedge_active = False
+        self.hedge_update_frequency = 24 * 60  # Обновление хеджа раз в сутки
+        self.hedge_counter = 0
 
     def update_price_distribution(self, price):
         self.price_distribution.append(price)
@@ -222,121 +227,66 @@ class OrderManager:
         sell_step,
         num_levels=10,
     ):
-        buy_range = ema - lower_bound
-        sell_range = upper_bound - ema
+        """
+        Создание асимметричной сетки ордеров
+        """
+        # Защита от некорректных значений
+        if lower_bound >= current_price or current_price >= upper_bound:
+            current_price = (lower_bound + upper_bound) / 2
 
-        buy_levels = int(num_levels * (buy_range / (buy_range + sell_range)))
-        sell_levels = num_levels - buy_levels
+        # Рассчитываем количество уровней для покупки и продажи
+        price_range = upper_bound - lower_bound
+        buy_range = current_price - lower_bound
+        sell_range = upper_bound - current_price
 
-        buy_prices = np.linspace(lower_bound, min(ema, current_price), buy_levels + 1)[
-            :-1
-        ]
-        sell_prices = np.linspace(
-            max(ema, current_price), upper_bound, sell_levels + 1
-        )[1:]
+        # Определяем пропорциональное количество уровней
+        buy_levels = max(1, int(num_levels * (buy_range / price_range)))
+        sell_levels = max(1, int(num_levels * (sell_range / price_range)))
 
-        # Применяем динамический шаг к ценам
-        buy_prices = [
-            current_price * (1 - (i + 1) * buy_step / 100) for i in range(buy_levels)
-        ]
-        sell_prices = [
-            current_price * (1 + (i + 1) * sell_step / 100) for i in range(sell_levels)
-        ]
+        # Создаем массивы цен с динамическим шагом
+        buy_prices = []
+        for i in range(buy_levels):
+            price = current_price * (1 - (i + 1) * buy_step / 100)
+            if price >= lower_bound:
+                buy_prices.append(price)
+
+        sell_prices = []
+        for i in range(sell_levels):
+            price = current_price * (1 + (i + 1) * sell_step / 100)
+            if price <= upper_bound:
+                sell_prices.append(price)
 
         return buy_prices, sell_prices
 
-    def place_order(self, order_type, price, volume):
-        # print(f"Attempting to place order: Type={order_type}, Price={price}, Volume={volume}")
-
-        if (order_type == "buy" and price >= self.current_price) or (
-            order_type == "sell" and price <= self.current_price
-        ):
-            # print(f"Invalid {order_type} order price. Current price: {self.current_price}")
-            return False
-
-        required_margin = price * volume
-        estimated_commission = price * volume * self.commission_rate
-        # print(
-        #     f"Required margin: {required_margin}, Estimated commission: {estimated_commission}, Free margin: {self.free_margin}"
-        # )
-
-        if price > 0 and self.free_margin >= required_margin + estimated_commission:
-            order = Order(order_type, price, volume, self.commission_rate)
-            self.orders.append(order)
-            self.free_margin -= required_margin + estimated_commission
-            # print(
-            # f"Placed {order_type} order at {price} for {volume} units. Estimated commission: {estimated_commission:.8f}"
-            # )
-            return True
-        else:
-            # print(f"Insufficient margin to place {order_type} order at {price} for {volume} units.")
-            return False
-
-    def update_grid(self, ema, current_price, price_history):
-        lower_bound, upper_bound = self.calculate_grid_boundaries(ema, price_history)
-
-        # Рассчитываем динамические шаги сетки для покупок и продаж
-        buy_step = self.calculate_dynamic_grid_step("buy")
-        sell_step = self.calculate_dynamic_grid_step("sell")
-
-        # Генерируем цены для покупки и продажи с учетом динамических шагов
-        buy_prices, sell_prices = self.create_asymmetric_grid(
-            ema, current_price, lower_bound, upper_bound, buy_step, sell_step
-        )
-
-        base_volume = self.calculate_base_volume(current_price)
-
-        # Удалим существующие неисполненные ордера
-        self.orders = [order for order in self.orders if order.executed]
-
-        # Размещаем новые ордера
-        for i, price in enumerate(buy_prices):
-            volume = base_volume * (self.volume_growth_factor**i)
-            self.place_order("buy", price, volume)
-
-        for i, price in enumerate(sell_prices):
-            volume = base_volume * (self.volume_growth_factor**i)
-            self.place_order("sell", price, volume)
-
-        # Проверяем, достаточно ли свободной маржи
-        total_margin_required = sum(
-            [order.price * order.volume for order in self.orders if not order.executed]
-        )
-
-        # Add this check to avoid division by zero
-        if total_margin_required > 0 and total_margin_required > self.free_margin:
-            volume_adjustment = self.free_margin / total_margin_required
-            for order in self.orders:
-                if not order.executed:
-                    order.volume *= volume_adjustment
-
-        # Обновляем график
-        buy_orders = [
-            order
-            for order in self.orders
-            if order.order_type == "buy" and not order.executed
-        ]
-        sell_orders = [
-            order
-            for order in self.orders
-            if order.order_type == "sell" and not order.executed
-        ]
-
-        if hasattr(self.graph, "set_full_data"):
-            distribution_data = self.get_price_distribution_data()
-            self.graph.set_full_data(
-                price_history,
-                [ema] * len(price_history),
-                buy_orders,
-                sell_orders,
-                self.order_history,
-                distribution_data,
+    def update_hedge_position(self, current_price):
+        """
+        Обновление хеджирующей позиции
+        """
+        if not self.hedge_active:
+            # Создаем новую хеджирующую позицию
+            lower_bound = current_price * (
+                1 - self.grid_step_percent / 100 * self.max_orders
             )
-            if hasattr(self.graph, "update_visible_range"):
-                self.graph.update_visible_range(self.graph.data_offset)
-        else:
-            # Fallback to old update method if set_full_data is not available
-            self.graph.update_orders(self.orders)
+            upper_bound = current_price * (
+                1 + self.grid_step_percent / 100 * self.max_orders
+            )
+
+            # Рассчитываем волатильность на основе исторических данных
+            if len(self.price_history) > 30:
+                price_returns = np.diff(np.log(self.price_history[-30:]))
+                volatility = np.std(price_returns) * np.sqrt(
+                    252
+                )  # Годовая волатильность
+            else:
+                volatility = 0.5  # Значение по умолчанию
+
+            hedge_position = self.options_manager.create_hedge_strategy(
+                current_price, (lower_bound, upper_bound), volatility
+            )
+
+            # Вычитаем стоимость хеджа из свободной маржи
+            self.free_margin -= hedge_position["total_cost"]
+            self.hedge_active = True
 
     def update_existing_orders(self, ema, current_price):
         for order in self.orders:
@@ -377,8 +327,50 @@ class OrderManager:
         self.calculate_floating_profit(current_price)
         self.calculate_free_margin()
         self.update_price_distribution(current_price)
-        # print(f"Checking orders at current price: {current_price}")
 
+        # Проверяем хедж до проверки ордеров
+        if self.hedge_active:
+            hedge_payout, triggered = self.options_manager.calculate_hedge_payout(
+                current_price
+            )
+            if triggered:
+                # Если сработал хедж:
+                print(f"Hedge triggered at price {current_price}")
+                # 1. Получаем выплату
+                self.balance += hedge_payout
+                self.free_margin += hedge_payout
+
+                # 2. Закрываем все открытые позиции по текущей цене
+                for position in self.positions[:]:
+                    profit = position.close_position(current_price)
+                    self.profit += profit
+                    self.closed_positions.append(position)
+                self.positions = []
+
+                # 3. Отменяем все активные ордера
+                self.orders = [order for order in self.orders if order.executed]
+
+                # 4. Деактивируем хедж
+                self.hedge_active = False
+                return  # Прекращаем обработку ордеров до возврата цены в диапазон
+
+        # Проверяем, нужно ли создать новую сетку
+        if not self.hedge_active and self.current_ema is not None:
+            lower_bound, upper_bound = self.calculate_grid_boundaries(
+                self.current_ema, self.price_history
+            )
+            # Если цена вернулась в диапазон после срабатывания хеджа
+            if (
+                lower_bound < current_price < upper_bound
+                and self.options_manager.last_trigger_price is not None
+            ):
+                print(f"Creating new grid after hedge trigger at price {current_price}")
+                # Создаем новую сетку и новый хедж
+                self.options_manager.last_trigger_price = None
+                self.update_grid(self.current_ema, current_price, self.price_history)
+                self.hedge_active = True
+
+        # Обычная обработка ордеров
         last_price = (
             self.price_history[-2]
             if len(self.price_history) > 1
@@ -387,7 +379,7 @@ class OrderManager:
         price_range = sorted([last_price, current_price])
 
         orders_executed = False
-        for order in self.orders[:]:  # Используем копию списка
+        for order in self.orders[:]:
             if not order.executed:
                 if (
                     order.order_type == "buy"
@@ -396,46 +388,20 @@ class OrderManager:
                     order.order_type == "sell"
                     and price_range[0] <= order.price <= price_range[1]
                 ):
-                    # print(f"Executing order: {order.id}")
                     self.execute_order(order, order.price)
                     orders_executed = True
 
+        # Проверяем необходимость создания новой сетки
+        active_orders = [order for order in self.orders if not order.executed]
+        if len(active_orders) == 0 and not self.options_manager.last_trigger_price:
+            print(
+                f"Creating new grid after all orders executed at price {current_price}"
+            )
+            self.update_grid(self.current_ema, current_price, self.price_history)
+            self.hedge_active = True
+
         if orders_executed:
             self.update_display()
-
-        # Проверяем, нужно ли обновить сетку
-        buy_orders = [
-            order
-            for order in self.orders
-            if order.order_type == "buy" and not order.executed
-        ]
-        sell_orders = [
-            order
-            for order in self.orders
-            if order.order_type == "sell" and not order.executed
-        ]
-        total_orders = len(buy_orders) + len(sell_orders)
-
-        should_update_grid = False
-
-        if total_orders == 0:
-            # print("No open orders. Initializing grid.")
-            should_update_grid = True
-        elif total_orders > 0:
-            if (
-                len(buy_orders) <= total_orders * 0.2
-                or len(sell_orders) <= total_orders * 0.2
-            ):
-                # print("Low order count on one side. Updating grid.")
-                should_update_grid = True
-
-        if should_update_grid and self.current_ema is not None:
-            self.update_grid(self.current_ema, current_price, self.price_history)
-
-    def update_display(self):
-        # Этот метод будет вызывать обновление графика
-        # Его реализацию нужно добавить в TradingSimulator
-        pass
 
     def execute_order(self, order, execution_price):
         order.executed = True
@@ -452,7 +418,6 @@ class OrderManager:
             self.profit += profit
             self.closed_positions.append(opposite_position)
             self.positions.remove(opposite_position)
-            self.initialize_grid()
         else:
             new_position = Position(
                 order.order_type, execution_price, order.volume, self.commission_rate
@@ -471,19 +436,6 @@ class OrderManager:
 
         self.calculate_free_margin()
 
-        # Рассчитываем новый шаг сетки
-        new_grid_step = self.calculate_dynamic_grid_step(order.order_type)
-
-        # Размещаем новый ордер с учетом нового шага сетки
-        new_price = execution_price * (
-            1 + new_grid_step / 100
-            if order.order_type == "buy"
-            else 1 - new_grid_step / 100
-        )
-        self.place_order(
-            "sell" if order.order_type == "buy" else "buy", new_price, order.volume
-        )
-
         self.executed_orders_history.append(order)
         if len(self.executed_orders_history) > self.distribution_period * 2:
             self.executed_orders_history.pop(0)
@@ -492,6 +444,90 @@ class OrderManager:
         self.orders.remove(order)
         if order not in self.order_history:
             self.order_history.append(order)
+
+    def update_grid(self, ema, current_price, price_history):
+        """
+        Создание новой сетки и хеджа
+        """
+        print(f"Updating grid at price {current_price}")
+        lower_bound, upper_bound = self.calculate_grid_boundaries(ema, price_history)
+
+        # Рассчитываем динамические шаги сетки для покупок и продаж
+        buy_step = self.calculate_dynamic_grid_step("buy")
+        sell_step = self.calculate_dynamic_grid_step("sell")
+
+        # Генерируем цены для покупки и продажи
+        buy_prices, sell_prices = self.create_asymmetric_grid(
+            ema, current_price, lower_bound, upper_bound, buy_step, sell_step
+        )
+
+        base_volume = self.calculate_base_volume(current_price)
+
+        # Размещаем новые ордера
+        for i, price in enumerate(buy_prices):
+            volume = base_volume * (self.volume_growth_factor**i)
+            self.place_order("buy", price, volume)
+
+        for i, price in enumerate(sell_prices):
+            volume = base_volume * (self.volume_growth_factor**i)
+            self.place_order("sell", price, volume)
+
+        # Создаем новый хедж
+        if len(price_history) > 30:
+            price_returns = np.diff(np.log(price_history[-30:]))
+            volatility = np.std(price_returns) * np.sqrt(252)
+        else:
+            volatility = 0.5
+
+        self.options_manager.create_hedge_strategy(
+            current_price, (lower_bound, upper_bound), volatility
+        )
+
+        # Обновляем график
+        if hasattr(self.graph, "set_full_data"):
+            buy_orders = [
+                order
+                for order in self.orders
+                if order.order_type == "buy" and not order.executed
+            ]
+            sell_orders = [
+                order
+                for order in self.orders
+                if order.order_type == "sell" and not order.executed
+            ]
+            distribution_data = self.get_price_distribution_data()
+
+            self.graph.set_full_data(
+                price_history,
+                [ema] * len(price_history),
+                buy_orders,
+                sell_orders,
+                self.order_history,
+                distribution_data,
+            )
+
+    def get_hedge_metrics(self):
+        """
+        Получение метрик хеджирования
+        """
+        return self.options_manager.get_hedge_metrics()
+
+    def calculate_total_position_risk(self, current_price):
+        """
+        Расчет общего риска позиций с учетом хеджа
+        """
+        # Риск по открытым позициям
+        position_risk = sum(abs(pos.floating_profit) for pos in self.positions)
+
+        # Риск по хеджирующим позициям
+        hedge_exposure = self.options_manager.get_current_hedge_exposure(current_price)
+
+        return position_risk - hedge_exposure  # Чистый риск с учетом хеджа
+
+    def update_display(self):
+        # Этот метод будет вызывать обновление графика
+        # Его реализацию нужно добавить в TradingSimulator
+        pass
 
     def calculate_dynamic_grid_step(self, order_type):
         if order_type == "buy":
@@ -565,13 +601,6 @@ class OrderManager:
     def get_free_margin(self):
         self.calculate_free_margin()
         return self.free_margin
-
-    def initialize_grid(self):
-        if self.current_ema is not None and len(self.price_history) > 0:
-            print("Initializing grid.")
-            self.update_grid(self.current_ema, self.current_price, self.price_history)
-        else:
-            print("Grid initialization skipped due to missing data.")
 
     def clear_orders(self):
         self.orders = []
