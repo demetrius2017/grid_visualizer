@@ -45,9 +45,7 @@ class PositionsWindow(QtWidgets.QWidget):
 
         self.hedge_table = QtWidgets.QTableWidget()
         self.hedge_table.setColumnCount(4)
-        self.hedge_table.setHorizontalHeaderLabels(
-            ["Option Type", "Strike", "Premium", "Current Value"]
-        )
+        self.hedge_table.setHorizontalHeaderLabels(["Option Type", "Strike", "Premium", "Current Value"])
         options_layout.addWidget(QtWidgets.QLabel("Active Hedge Positions"))
         options_layout.addWidget(self.hedge_table)
 
@@ -100,89 +98,38 @@ class PositionsWindow(QtWidgets.QWidget):
         # Обновление открытых позиций
         self.open_positions_table.setRowCount(len(open_positions))
         for i, position in enumerate(open_positions):
-            self.open_positions_table.setItem(
-                i, 0, QtWidgets.QTableWidgetItem(position.order_type)
-            )
-            self.open_positions_table.setItem(
-                i, 1, QtWidgets.QTableWidgetItem(f"{position.entry_price:.8f}")
-            )
-            self.open_positions_table.setItem(
-                i, 2, QtWidgets.QTableWidgetItem(f"{position.volume:.8f}")
-            )
-            self.open_positions_table.setItem(
-                i, 3, QtWidgets.QTableWidgetItem(f"{position.floating_profit:.8f}")
-            )
-            self.open_positions_table.setItem(
-                i, 4, QtWidgets.QTableWidgetItem(f"{current_price:.8f}")
-            )
-            self.open_positions_table.setItem(
-                i, 5, QtWidgets.QTableWidgetItem(f"{position.commission:.8f}")
-            )
+            self.open_positions_table.setItem(i, 0, QtWidgets.QTableWidgetItem(position.order_type))
+            self.open_positions_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{position.entry_price:.8f}"))
+            self.open_positions_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{position.volume:.8f}"))
+            self.open_positions_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{position.floating_profit:.8f}"))
+            self.open_positions_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{current_price:.8f}"))
+            self.open_positions_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{position.commission:.8f}"))
 
         # Обновление закрытых позиций
         self.closed_positions_table.setRowCount(len(closed_positions))
         for i, position in enumerate(closed_positions):
-            self.closed_positions_table.setItem(
-                i, 0, QtWidgets.QTableWidgetItem(position.order_type)
-            )
-            self.closed_positions_table.setItem(
-                i, 1, QtWidgets.QTableWidgetItem(f"{position.entry_price:.8f}")
-            )
-            self.closed_positions_table.setItem(
-                i, 2, QtWidgets.QTableWidgetItem(f"{position.exit_price:.8f}")
-            )
-            self.closed_positions_table.setItem(
-                i, 3, QtWidgets.QTableWidgetItem(f"{position.volume:.8f}")
-            )
-            self.closed_positions_table.setItem(
-                i, 4, QtWidgets.QTableWidgetItem(f"{position.profit:.8f}")
-            )
-            self.closed_positions_table.setItem(
-                i, 5, QtWidgets.QTableWidgetItem(f"{position.commission:.8f}")
-            )
+            self.closed_positions_table.setItem(i, 0, QtWidgets.QTableWidgetItem(position.order_type))
+            self.closed_positions_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{position.entry_price:.8f}"))
+            self.closed_positions_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{position.exit_price:.8f}"))
+            self.closed_positions_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{position.volume:.8f}"))
+            self.closed_positions_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{position.profit:.8f}"))
+            self.closed_positions_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{position.commission:.8f}"))
 
         # Обновление активных опционов
         if active_options:
-            self.hedge_table.setRowCount(
-                len(active_options) * 2
-            )  # 2 опциона на позицию
-            row = 0
-            for position in active_options:
-                # Put option
-                self.hedge_table.setItem(row, 0, QtWidgets.QTableWidgetItem("Put"))
-                self.hedge_table.setItem(
-                    row,
-                    1,
-                    QtWidgets.QTableWidgetItem(f"{position['put']['strike']:.8f}"),
-                )
-                self.hedge_table.setItem(
-                    row,
-                    2,
-                    QtWidgets.QTableWidgetItem(f"{position['put']['premium']:.8f}"),
-                )
-                put_value = max(0, position["put"]["strike"] - current_price)
-                self.hedge_table.setItem(
-                    row, 3, QtWidgets.QTableWidgetItem(f"{put_value:.8f}")
-                )
+            self.hedge_table.setRowCount(len(active_options))
+            for i, option in enumerate(active_options):
+                self.hedge_table.setItem(i, 0, QtWidgets.QTableWidgetItem(option["type"].capitalize()))
+                self.hedge_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{option['strike']:.8f}"))
+                self.hedge_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{option['premium']:.8f}"))
 
-                # Call option
-                row += 1
-                self.hedge_table.setItem(row, 0, QtWidgets.QTableWidgetItem("Call"))
-                self.hedge_table.setItem(
-                    row,
-                    1,
-                    QtWidgets.QTableWidgetItem(f"{position['call']['strike']:.8f}"),
-                )
-                self.hedge_table.setItem(
-                    row,
-                    2,
-                    QtWidgets.QTableWidgetItem(f"{position['call']['premium']:.8f}"),
-                )
-                call_value = max(0, current_price - position["call"]["strike"])
-                self.hedge_table.setItem(
-                    row, 3, QtWidgets.QTableWidgetItem(f"{call_value:.8f}")
-                )
-                row += 1
+                # Расчет текущей стоимости опциона
+                if option["type"] == "put":
+                    current_value = max(0, option["strike"] - current_price)
+                else:  # call
+                    current_value = max(0, current_price - option["strike"])
+
+                self.hedge_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{current_value:.8f}"))
         else:
             self.hedge_table.setRowCount(0)
 
@@ -193,53 +140,22 @@ class PositionsWindow(QtWidgets.QWidget):
             total_payout = 0
 
             for i, option in enumerate(options_history):
-                # Put option
-                put_payout = max(
-                    0, option["put"]["strike"] - option.get("trigger_price", 0)
-                )
-                put_premium = option["put"]["premium"]
+                option_type = option["type"].capitalize()
+                strike = option["strike"]
+                trigger_price = option["trigger_price"]
+                payout = option["payout"]
 
-                # Call option
-                call_payout = max(
-                    0, option.get("trigger_price", 0) - option["call"]["strike"]
-                )
-                call_premium = option["call"]["premium"]
+                # Премия опциона теперь должна предоставляться в истории
+                premium = option.get("premium", 0)
+                total_premium_paid += premium
+                total_payout += payout
 
-                # Записываем тот опцион, который сработал
-                if put_payout > 0:
-                    option_type = "Put"
-                    strike = option["put"]["strike"]
-                    premium = put_premium
-                    payout = put_payout
-                else:
-                    option_type = "Call"
-                    strike = option["call"]["strike"]
-                    premium = call_premium
-                    payout = call_payout
-
-                total_premium_paid += put_premium + call_premium
-                total_payout += put_payout + call_payout
-
-                self.options_history_table.setItem(
-                    i, 0, QtWidgets.QTableWidgetItem(option_type)
-                )
-                self.options_history_table.setItem(
-                    i, 1, QtWidgets.QTableWidgetItem(f"{strike:.8f}")
-                )
-                self.options_history_table.setItem(
-                    i, 2, QtWidgets.QTableWidgetItem(f"{premium:.8f}")
-                )
-                self.options_history_table.setItem(
-                    i,
-                    3,
-                    QtWidgets.QTableWidgetItem(f"{option.get('trigger_price', 0):.8f}"),
-                )
-                self.options_history_table.setItem(
-                    i, 4, QtWidgets.QTableWidgetItem(f"{payout:.8f}")
-                )
-                self.options_history_table.setItem(
-                    i, 5, QtWidgets.QTableWidgetItem(f"{payout - premium:.8f}")
-                )
+                self.options_history_table.setItem(i, 0, QtWidgets.QTableWidgetItem(option_type))
+                self.options_history_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{strike:.8f}"))
+                self.options_history_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{premium:.8f}"))
+                self.options_history_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{trigger_price:.8f}"))
+                self.options_history_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{payout:.8f}"))
+                self.options_history_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{payout - premium:.8f}"))
 
             # Обновляем статистику по опционам
             net_result = total_payout - total_premium_paid
@@ -248,7 +164,6 @@ class PositionsWindow(QtWidgets.QWidget):
                 f"Total Payouts: {total_payout:.8f}\n"
                 f"Net Result: {net_result:.8f}"
             )
-
         # Обновление общей сводки
         total_profit = sum(position.profit for position in closed_positions)
         total_commission = sum(position.commission for position in closed_positions)

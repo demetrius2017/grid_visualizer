@@ -251,6 +251,32 @@ class MarketGraph(QtWidgets.QWidget):
         self.report_label.setText("")
         print("Graph cleared")
 
+    def auto_scale_view(self):
+        """Метод для автоматического масштабирования представления графика"""
+        if not self.full_price_data:
+            return
+
+        # Получаем все цены, включая ордера
+        all_prices = self.full_price_data[:]
+        all_prices.extend([order.price for order in self.full_buy_orders])
+        all_prices.extend([order.price for order in self.full_sell_orders])
+
+        if all_prices:
+            # Находим min и max цены
+            min_price = min(all_prices)
+            max_price = max(all_prices)
+            price_range = max_price - min_price
+
+            # Добавляем отступы для лучшей видимости
+            padding = price_range * 0.2  # 20% отступ
+            self.graphWidget.setYRange(min_price - padding, max_price + padding)
+
+            # Устанавливаем диапазон по X для отображения последних N свечей
+            visible_points = min(len(self.full_price_data), self.visible_range * 2)  # Увеличиваем видимый диапазон
+            if visible_points > 0:
+                start_index = max(0, len(self.full_price_data) - visible_points)
+                self.graphWidget.setXRange(start_index, len(self.full_price_data))
+
     def update_visible_range(self, value=None):
         if value is not None:
             self.data_offset = value
@@ -267,8 +293,6 @@ class MarketGraph(QtWidgets.QWidget):
             visible_ema = self.full_ema_data[start:end]
             self.ema_curve.setData(range(start, end), visible_ema)
 
-        self.graphWidget.setXRange(start, end)
-
         self.update_order_book(
             self.full_buy_orders,
             self.full_sell_orders,
@@ -276,6 +300,9 @@ class MarketGraph(QtWidgets.QWidget):
             self.full_price_data[-1],
         )
         self.update_order_history(self.full_order_history)
+        
+        # Добавляем автоматическое масштабирование после обновления данных
+        self.auto_scale_view()
 
     def update_order_book(self, buy_orders, sell_orders, current_time, current_price):
         # Фильтруем ордера в видимом диапазоне
@@ -355,7 +382,8 @@ class MarketGraph(QtWidgets.QWidget):
             self.scroll_bar.setMaximum(0)
 
         self.update_visible_range(self.data_offset)
-
+        # Добавляем автоматическое масштабирование
+        self.auto_scale_view()
         self.distribution_data = distribution_data
         self.update_distribution_chart()
 
