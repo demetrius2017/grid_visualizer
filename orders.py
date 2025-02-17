@@ -297,13 +297,15 @@ class OrderManager:
 
     def place_order(self, order_type, price, volume):
         """Размещение ордера с проверкой маржи"""
-        # print(f"\nAttempting to place {order_type} order:")
-        # print(f"Price: {price:.8f}")
-        # print(f"Volume: {volume:.8f}")
-
+        
         required_margin = price * volume
         estimated_commission = price * volume * MAKER_COMMISSION_RATE
         total_required = required_margin + estimated_commission
+
+        # Проверяем, есть ли свободная маржа
+        if self.free_margin <= 0:
+            print(f"ERROR: Free margin is negative ({self.free_margin:.8f}). Cannot place order.")
+            return False
 
         # Добавляем проверку минимального объема
         min_volume = 0.001  # Минимальный допустимый объем
@@ -311,30 +313,28 @@ class OrderManager:
             print(f"ERROR: Volume {volume:.8f} is below minimum {min_volume}")
             return False
 
-        # print(f"Required margin: {required_margin:.8f}")
-        # print(f"Estimated commission: {estimated_commission:.8f}")
-        # print(f"Free margin available: {self.free_margin:.8f}")
-
-        # Проверяем, не превышает ли требуемая маржа определенный процент от свободной
+        # Проверяем, не превышает ли требуемая маржа определенный процент от свободной маржи
         max_margin_per_order = self.free_margin * 0.2  # Максимум 20% свободной маржи на один ордер
         if total_required > max_margin_per_order:
             print(f"ERROR: Required margin {total_required:.8f} exceeds max per order {max_margin_per_order:.8f}")
             # Корректируем объем
             adjusted_volume = (max_margin_per_order / price) / (1 + MAKER_COMMISSION_RATE)
-            # print(f"Adjusting volume from {volume:.8f} to {adjusted_volume:.8f}")
+            print(f"Adjusting volume from {volume:.8f} to {adjusted_volume:.8f}")
             volume = adjusted_volume
             total_required = price * volume * (1 + MAKER_COMMISSION_RATE)
 
+        # Последняя проверка перед размещением
         if price > 0 and self.free_margin >= total_required:
             order = Order(order_type, price, volume, MAKER_COMMISSION_RATE)
             self.orders.append(order)
             self.free_margin -= total_required
-            # print(f"Order placed successfully. Remaining margin: {self.free_margin:.8f}")
+            print(f"Order placed successfully. Remaining margin: {self.free_margin:.8f}")
             return True
         else:
             print(f"ERROR: Not enough margin to place {order_type} order!")
             print(f"Required: {total_required:.8f}, Available: {self.free_margin:.8f}")
             return False
+
 
     def create_asymmetric_grid(self, ema, current_price, lower_bound, upper_bound, buy_step, sell_step):
         """Создание асимметричной сетки ордеров"""
@@ -411,22 +411,27 @@ class OrderManager:
     def trigger_hedge(self, market_price):
         print(f"Hedge triggered at price {market_price:.4f}")
 
-        # Выплачиваем условную компенсацию (опцион), например, фиксированную сумму
         estimated_volume = self.estimate_grid_volume()
         hedge_compensation, _ = self.options_manager.calculate_hedge_payout(market_price, estimated_volume)
-        # Закрываем все позиции по рыночной цене
+
         profit_from_closing = self.close_all_positions_at_market(market_price)
 
         self.hedge_active = False
-        # Добавляем компенсацию к балансу
+
         self.balance += hedge_compensation
-        self.free_margin = self.balance  # Все освободилось
+        self.free_margin = self.balance
 
         print(f"Hedge executed. Compensation: {hedge_compensation:.4f}, P&L from closing: {profit_from_closing:.4f}")
 
         # После хеджа сбрасываем сетку
         self.orders = []
+        # Пересчитываем маржу после создания новой сетки
+        self.calculate_free_margin()
         self.initialize_new_grid(market_price)
+
+        # Пересчитываем маржу после создания новой сетки
+        self.calculate_free_margin()
+
 
     def calculate_base_volume(self, current_price):
         """Расчет базового объема с минимальным фиксированным значением"""
@@ -443,7 +448,7 @@ class OrderManager:
         # Берем максимум из рассчитанного и минимального объема
         base_volume = max(margin_based_volume, min_base_volume)
 
-        print(f"Calculated base volume: {base_volume:.8f}")
+        # print(f"Calculated base volume: {base_volume:.8f}")
         return base_volume
 
     def calculate_order_volume(self, current_price):
@@ -888,31 +893,15 @@ class OrderManager:
     def calculate_free_margin(self):
         """
         Расчет свободной маржи
-        Free Margin = Balance + Floating Profit - Used Margin
+        Free Margin = Balance + Floating Profit - Used Margin (positions) - Used Margin (orders)
         """
-        # Маржа под открытые позиции (по цене входа)
-        margin_used = sum(pos.volume * pos.entry_price for pos in self.positions)
+        margin_used_positions = sum(pos.volume * pos.entry_price for pos in self.positions)
 
-        # Маржа под неисполненные ордера
-        orders_margin = sum(
+        margin_used_orders = sum(
             order.volume * order.price * (1 + MAKER_COMMISSION_RATE) for order in self.orders if not order.executed
         )
 
-        # Обновляем свободную маржу
-        previous_margin = self.free_margin
-        self.free_margin = self.balance + self.floating_profit - margin_used - orders_margin
-
-        # print(f"\nFree margin calculation:")
-        # print(f"Balance: {self.balance:.8f}")
-        # print(f"Floating profit: {self.floating_profit:.8f}")
-        # print(f"Used margin (positions): {margin_used:.8f}")
-        # print(f"Used margin (orders): {orders_margin:.8f}")
-        # print(f"Previous free margin: {previous_margin:.8f}")
-        # print(f"Current free margin: {self.free_margin:.8f}")
-
-    def calculate_free_margin(self):
-        total_position_value = sum(pos.volume * self.current_price for pos in self.positions)
-        self.free_margin = self.balance - total_position_value
+        self.free_margin = self.balance + self.floating_profit - margin_used_positions - margin_used_orders
 
     def get_order_history(self):
         return self.order_history
