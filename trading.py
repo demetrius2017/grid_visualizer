@@ -8,19 +8,19 @@ class TradingSimulator:
     def __init__(
         self,
         graph,
-        initial_balance=10000,
-        commission_rate=0.16 / 100,
-        grid_size=10,
-        ema_period=20,
-        min_grid_coverage=0.3,
-        min_orders=20,
-        max_orders=50,
+        initial_balance=100000,
+        grid_size=20,
+        ema_period=50,
+        min_grid_coverage=0.10,
+        min_orders=5,
+        max_orders=20,
     ):
         self.graph = graph
         self.current_price = 0.5  # Устанавливаем начальную цену
         self.volatility = 0.005
         self.stop_simulation = True
         self.grid_size = grid_size
+        self.grid_step_percent = min_grid_coverage *100 / grid_size
         self.ema_period = ema_period
         self.prices = [0.5]  # Инициализируем с начальной ценой
         self.ema = []
@@ -28,13 +28,14 @@ class TradingSimulator:
         self.free_margin_history = []
         self.margin_history = []
         self.positions_window = None
+        
 
         # Создаем OrderManager с начальными данными
         self.order_manager = OrderManager(
             initial_balance,
-            commission_rate,
-            grid_size,
+            self.grid_size,
             graph,
+            self.grid_step_percent,
             min_grid_coverage=min_grid_coverage,
             min_orders=min_orders,
             max_orders=max_orders,

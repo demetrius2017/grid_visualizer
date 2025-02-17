@@ -7,6 +7,7 @@ from options_manager import OptionsManager
 # Константы для комиссий Binance
 MAKER_COMMISSION_RATE = 0.0002  # 0.02%
 TAKER_COMMISSION_RATE = 0.0005  # 0.05%
+MIN_VOLUME_THRESHOLD = 0.01
 
 
 class Position:
@@ -59,17 +60,15 @@ class OrderManager:
     def __init__(
         self,
         initial_balance,
-        commission_rate,
         grid_size,
         graph,
-        grid_step_percent=0.5,
-        min_grid_coverage=0.20,
-        min_orders=20,
-        max_orders=50,
+        grid_step_percent,
+        min_grid_coverage,
+        min_orders,
+        max_orders,
     ):
         self.initial_balance = initial_balance
         self.balance = initial_balance
-        self.commission_rate = commission_rate
         self.grid_size = grid_size
         self.grid_step_percent = grid_step_percent
         self.min_grid_coverage = min_grid_coverage
@@ -97,7 +96,7 @@ class OrderManager:
         self.total_profit = 0
         self.total_commission = 0
         # Существующая инициализация...
-        self.options_manager = OptionsManager(commission_rate)
+        self.options_manager = OptionsManager()
         self.hedge_active = False
         self.hedge_update_frequency = 24 * 60  # Обновление хеджа раз в сутки
         self.hedge_counter = 0
@@ -115,7 +114,8 @@ class OrderManager:
         self.initial_grid_created = False  # Флаг для отслеживания создания начальной сетки
         self.price_history = [0.5]  # Инициализируем историю цен
         # Добавляем базовый фиксированный объем
-        self.base_fixed_volume = 10.0
+        self.base_fixed_volume = 1.0
+        self.low_margin_triggered = False
 
     def check_grid_state(self):
         """Проверка состояния сетки и необходимости её обновления"""
@@ -165,32 +165,42 @@ class OrderManager:
         return False
 
     def update_grid(self, ema, current_price, price_history):
-        """Обновление сетки ордеров"""
+        """Простое обновление сетки ордеров: удаляем старые, создаем ровно min_orders вверх и вниз"""
         print(f"Updating grid at price {current_price}, EMA: {ema}")
 
         # Сохраняем текущее значение EMA
         self.last_ema = ema
 
-        # Существующая логика обновления сетки...
-        lower_bound, upper_bound = self.calculate_grid_boundaries(ema, price_history)
-        buy_step = self.calculate_dynamic_grid_step("buy")
-        sell_step = self.calculate_dynamic_grid_step("sell")
-        buy_prices, sell_prices = self.create_asymmetric_grid(
-            ema, current_price, lower_bound, upper_bound, buy_step, sell_step
-        )
-
-        # Отменяем существующие ордера
+        # Удаляем все ордера
         self.orders = [order for order in self.orders if order.executed]
 
-        # Размещаем новые ордера
+        # Задаем новую сетку вокруг текущей цены
         base_volume = self.calculate_base_volume(current_price)
-        for i, price in enumerate(buy_prices):
-            volume = base_volume * (self.volume_growth_factor**i)
-            self.place_order("buy", price, volume)
 
-        for i, price in enumerate(sell_prices):
+        # Buy ордера вниз от текущей цены
+        buy_prices = []
+        for i in range(self.min_orders):
+            price = ema * (1 - self.grid_step_percent / 100 * (i + 1))
+            buy_prices.append(price)
+
+        # Sell ордера вверх от текущей цены
+        sell_prices = []
+        for i in range(self.min_orders):
+            price = ema * (1 + self.grid_step_percent / 100 * (i + 1))
+            sell_prices.append(price)
+
+        for i, price in enumerate((buy_prices)):  # Сначала дальние, потом ближние
             volume = base_volume * (self.volume_growth_factor**i)
-            self.place_order("sell", price, volume)
+            if price < ema:
+                self.place_order("buy", price, volume)
+
+
+        for i, price in enumerate((sell_prices)):
+            volume = base_volume * (self.volume_growth_factor**i)
+            if price > ema:
+                self.place_order("sell", price, volume)
+
+        self.current_grid_bounds = (min(buy_prices), max(sell_prices))
 
     def update_price_distribution(self, price):
         self.price_distribution.append(price)
@@ -290,7 +300,7 @@ class OrderManager:
         # print(f"Volume: {volume:.8f}")
 
         required_margin = price * volume
-        estimated_commission = price * volume * self.commission_rate
+        estimated_commission = price * volume * MAKER_COMMISSION_RATE
         total_required = required_margin + estimated_commission
 
         # Добавляем проверку минимального объема
@@ -308,13 +318,13 @@ class OrderManager:
         if total_required > max_margin_per_order:
             print(f"ERROR: Required margin {total_required:.8f} exceeds max per order {max_margin_per_order:.8f}")
             # Корректируем объем
-            adjusted_volume = (max_margin_per_order / price) / (1 + self.commission_rate)
+            adjusted_volume = (max_margin_per_order / price) / (1 + MAKER_COMMISSION_RATE)
             # print(f"Adjusting volume from {volume:.8f} to {adjusted_volume:.8f}")
             volume = adjusted_volume
-            total_required = price * volume * (1 + self.commission_rate)
+            total_required = price * volume * (1 + MAKER_COMMISSION_RATE)
 
         if price > 0 and self.free_margin >= total_required:
-            order = Order(order_type, price, volume, self.commission_rate)
+            order = Order(order_type, price, volume, MAKER_COMMISSION_RATE)
             self.orders.append(order)
             self.free_margin -= total_required
             # print(f"Order placed successfully. Remaining margin: {self.free_margin:.8f}")
@@ -329,7 +339,7 @@ class OrderManager:
         print(f"Creating grid: price={current_price}, lower={lower_bound}, upper={upper_bound}")
 
         buy_prices = []
-        current_price_buy = current_price
+        current_price_buy = ema
         while current_price_buy > lower_bound and len(buy_prices) < self.max_orders:
             next_price = current_price_buy * (1 - buy_step / 100)
             if next_price >= lower_bound:
@@ -339,7 +349,7 @@ class OrderManager:
                 break
 
         sell_prices = []
-        current_price_sell = current_price
+        current_price_sell = ema
         while current_price_sell < upper_bound and len(sell_prices) < self.max_orders:
             next_price = current_price_sell * (1 + sell_step / 100)
             if next_price <= upper_bound:
@@ -350,30 +360,6 @@ class OrderManager:
 
         print(f"Generated {len(buy_prices)} buy prices and {len(sell_prices)} sell prices")
         return buy_prices, sell_prices
-
-    def update_hedge_position(self, current_price):
-        """
-        Обновление хеджирующей позиции
-        """
-        if not self.hedge_active:
-            # Создаем новую хеджирующую позицию
-            lower_bound = current_price * (1 - self.grid_step_percent / 100 * self.max_orders)
-            upper_bound = current_price * (1 + self.grid_step_percent / 100 * self.max_orders)
-
-            # Рассчитываем волатильность на основе исторических данных
-            if len(self.price_history) > 30:
-                price_returns = np.diff(np.log(self.price_history[-30:]))
-                volatility = np.std(price_returns) * np.sqrt(252)  # Годовая волатильность
-            else:
-                volatility = 0.5  # Значение по умолчанию
-
-            hedge_position = self.options_manager.create_hedge_strategy(
-                current_price, (lower_bound, upper_bound), volatility
-            )
-
-            # Вычитаем стоимость хеджа из свободной маржи
-            self.free_margin -= hedge_position["total_cost"]
-            self.hedge_active = True
 
     def update_existing_orders(self, ema, current_price):
         for order in self.orders:
@@ -386,6 +372,59 @@ class OrderManager:
                     new_price = max(order.price, ema * (1 + self.grid_step_percent / 100))
                     order.price = new_price
                     # print(f"Updated sell order {order.id} price to {new_price}")
+    def close_all_positions_at_market(self, market_price):
+        """Закрывает все открытые ордера по рыночной цене"""
+        closed_profit = 0
+
+        for order in self.orders:
+            if not order.executed:
+                continue
+
+            # Если ордер исполнен, фиксируем P&L по текущей цене
+            if order.order_type == "buy":
+                profit = (market_price - order.price) * order.volume
+            else:  # sell
+                profit = (order.price - market_price) * order.volume
+
+            closed_profit += profit
+
+            # Закрываем ордер, удаляя его из активных
+            order.closed = True
+            order.closing_price = market_price
+
+            # Можно сохранить в историю закрытых, если нужно
+            self.order_history.append(order)
+
+        # Очищаем список активных ордеров
+        self.orders = [order for order in self.orders if not order.executed or order.closed]
+
+        # Добавляем прибыль/убыток к балансу
+        self.balance += closed_profit
+        self.free_margin = self.balance  # После закрытия всех позиций маржа становится свободной
+
+        print(f"Closed all positions at market price {market_price:.4f}, Profit: {closed_profit:.4f}")
+
+        return closed_profit
+
+    def trigger_hedge(self, market_price):
+        print(f"Hedge triggered at price {market_price:.4f}")
+
+        # Выплачиваем условную компенсацию (опцион), например, фиксированную сумму
+        estimated_volume = self.estimate_grid_volume()
+        hedge_compensation, _ = self.options_manager.calculate_hedge_payout(market_price, estimated_volume)
+        # Закрываем все позиции по рыночной цене
+        profit_from_closing = self.close_all_positions_at_market(market_price)
+
+        self.hedge_active = False
+        # Добавляем компенсацию к балансу
+        self.balance += hedge_compensation
+        self.free_margin = self.balance  # Все освободилось
+
+        print(f"Hedge executed. Compensation: {hedge_compensation:.4f}, P&L from closing: {profit_from_closing:.4f}")
+
+        # После хеджа сбрасываем сетку
+        self.orders = []
+        self.initialize_new_grid(market_price)
 
     def calculate_base_volume(self, current_price):
         """Расчет базового объема с минимальным фиксированным значением"""
@@ -395,6 +434,10 @@ class OrderManager:
         # Рассчитываем объем на основе свободной маржи
         margin_based_volume = self.free_margin * 0.5 / (self.max_orders * 2 * current_price)
 
+        if margin_based_volume < MIN_VOLUME_THRESHOLD:
+            self.low_margin_triggered = True
+        else:
+            self.low_margin_triggered = False
         # Берем максимум из рассчитанного и минимального объема
         base_volume = max(margin_based_volume, min_base_volume)
 
@@ -411,27 +454,26 @@ class OrderManager:
         return volume_per_level
 
     def place_counter_order(self, executed_order, execution_price):
-        """Размещение контр-ордера после исполнения"""
+        """Размещение контр-ордера после исполнения, с тем же объемом, что был у исполненного"""
         if not self.current_grid_bounds:
             print("Error: No grid bounds set")
             return
 
-        # print(f"Placing counter order for {executed_order.order_type} at {execution_price}")
         lower_bound, upper_bound = self.current_grid_bounds
         grid_step = self.calculate_dynamic_grid_step("sell" if executed_order.order_type == "buy" else "buy")
+
+        volume = executed_order.volume  # Вот тут фиксируем объем как у исполнившегося ордера
 
         if executed_order.order_type == "buy":
             new_price = execution_price * (1 + grid_step / 100)
             if new_price <= upper_bound:
-                # print(f"Placing counter SELL order at {new_price}")
-                self.place_order("sell", new_price, executed_order.volume)
+                self.place_order("sell", new_price, volume)
             else:
                 print(f"Counter sell price {new_price} exceeds upper bound {upper_bound}")
         else:
             new_price = execution_price * (1 - grid_step / 100)
             if new_price >= lower_bound:
-                # print(f"Placing counter BUY order at {new_price}")
-                self.place_order("buy", new_price, executed_order.volume)
+                self.place_order("buy", new_price, volume)
             else:
                 print(f"Counter buy price {new_price} below lower bound {lower_bound}")
 
@@ -456,19 +498,20 @@ class OrderManager:
             )
 
             # Добавляем недостающие ордера
-            base_volume = self.calculate_base_volume(self.current_price)
+            base_volume = self.base_fixed_volume * (self.volume_growth_factor**i)
             if len(active_buy_orders) < self.min_orders:
-                for i, price in enumerate(buy_prices):
+                for i, price in enumerate((buy_prices)):
                     # Проверяем, нет ли уже ордера на этой цене
                     if not any(o.price == price for o in active_buy_orders):
                         volume = base_volume * (self.volume_growth_factor**i)
                         self.place_order("buy", price, volume)
 
             if len(active_sell_orders) < self.min_orders:
-                for i, price in enumerate(sell_prices):
+                for i, price in enumerate((sell_prices)):
                     if not any(o.price == price for o in active_sell_orders):
                         volume = base_volume * (self.volume_growth_factor**i)
                         self.place_order("sell", price, volume)
+
 
     def calculate_hedge_boundaries(self, current_price):
         """
@@ -525,38 +568,39 @@ class OrderManager:
         # Дополнительная проверка границ сетки
         if self.current_grid_bounds:
             lower_bound, upper_bound = self.current_grid_bounds
-            if current_price < lower_bound:
+            if current_price < lower_bound or self.low_margin_triggered:
                 trigger_hedge = True
                 trigger_reason = f"Price {current_price:.8f} below grid bound {lower_bound:.8f}"
-            elif current_price > upper_bound:
+            elif current_price > upper_bound or self.low_margin_triggered:
                 trigger_hedge = True
                 trigger_reason = f"Price {current_price:.8f} above grid bound {upper_bound:.8f}"
 
         # Обработка срабатывания хеджа
         if trigger_hedge:
-            print(f"\nTriggering hedge: {trigger_reason}")
-            estimated_volume = self.estimate_grid_volume()
-            hedge_payout, _ = self.options_manager.calculate_hedge_payout(current_price, estimated_volume)
-            print(f"Hedge payout with estimated volume {estimated_volume:.8f}: {hedge_payout:.8f}")
+            self.trigger_hedge(current_price)
+            # print(f"\nTriggering hedge: {trigger_reason}")
+            # estimated_volume = self.estimate_grid_volume()
+            # hedge_payout, _ = self.options_manager.calculate_hedge_payout(current_price, estimated_volume)
+            # print(f"Hedge payout with estimated volume {estimated_volume:.8f}: {hedge_payout:.8f}")
 
-            self.balance += hedge_payout
+            # self.balance += hedge_payout
 
-            margin_returned = sum(
-                order.volume * order.price * (1 + (MAKER_COMMISSION_RATE if order.is_maker else TAKER_COMMISSION_RATE))
-                for order in self.orders
-                if not order.executed
-            )
-            self.free_margin += margin_returned
+            # margin_returned = sum(
+            #     order.volume * order.price * (1 + (MAKER_COMMISSION_RATE if order.is_maker else TAKER_COMMISSION_RATE))
+            #     for order in self.orders
+            #     if not order.executed
+            # )
+            # self.free_margin += margin_returned
 
-            self.orders = [order for order in self.orders if order.executed]
+            # self.orders = [order for order in self.orders if order.executed]
 
-            self.hedge_active = False
+            # self.hedge_active = False
 
-            print("Initializing new grid...")
-            self.initialize_new_grid(current_price)
+            # print("Initializing new grid...")
+            # self.initialize_new_grid(current_price)
 
-            # ВАЖНО!
-            self.last_grid_time = len(self.price_history)  # Если используешь защиту от частых перестроек
+            # # ВАЖНО!
+            # self.last_grid_time = len(self.price_history)  # Если используешь защиту от частых перестроек
 
             return  # Останавливаем дальнейшее выполнение метода
 
@@ -627,8 +671,8 @@ class OrderManager:
         print(f"\nInitializing new full grid at price {current_price:.8f}")
 
         # Перестраиваем сетку как в самом начале, ± max_orders шагов от цены
-        lower_bound = current_price * (1 - self.grid_step_percent * self.max_orders / 100)
-        upper_bound = current_price * (1 + self.grid_step_percent * self.max_orders / 100)
+        lower_bound = self.current_ema * (1 - self.grid_step_percent * self.max_orders / 100)
+        upper_bound = self.current_ema * (1 + self.grid_step_percent * self.max_orders / 100)
 
         self.current_grid_bounds = (lower_bound, upper_bound)
 
@@ -636,15 +680,20 @@ class OrderManager:
             self.current_ema, current_price, lower_bound, upper_bound, self.grid_step_percent, self.grid_step_percent
         )
 
-        base_volume = self.calculate_base_volume(current_price)
+        buy_prices = buy_prices[: self.max_orders]
+        sell_prices = sell_prices[: self.max_orders]
 
-        for i, price in enumerate(buy_prices):
-            volume = base_volume * (self.volume_growth_factor**i)
-            self.place_order("buy", price, volume)
+        base_volume = self.calculate_base_volume(self.current_ema)
 
-        for i, price in enumerate(sell_prices):
+        for i, price in enumerate((buy_prices)):
             volume = base_volume * (self.volume_growth_factor**i)
-            self.place_order("sell", price, volume)
+            if price < self.current_ema:
+                self.place_order("buy", price, volume)
+
+        for i, price in enumerate((sell_prices)):
+            volume = base_volume * (self.volume_growth_factor**i)
+            if price > self.current_ema:
+                self.place_order("sell", price, volume)
 
         if len(self.price_history) > 30:
             price_returns = np.diff(np.log(self.price_history[-30:]))
@@ -697,6 +746,14 @@ class OrderManager:
 
         return self.base_grid_step * multiplier
 
+    def print_orders(self):
+        print("\nТекущая сетка ордеров:")
+        for order in self.orders:
+            if not order.executed:
+                print(
+                    f"{order.order_type.upper()} | Цена: {order.price:.4f} | Объем: {order.volume:.4f} | ID: {order.id}"
+                )
+
     def initialize_grid(self):
         if not self.initial_grid_created and self.current_price and self.current_ema:
             print(f"Initializing grid at price {self.current_price}, EMA: {self.current_ema}")
@@ -724,13 +781,15 @@ class OrderManager:
 
             base_volume = self.calculate_base_volume(self.current_price)
 
-            for i, price in enumerate(buy_prices):
+            for i, price in enumerate((buy_prices)):
                 volume = base_volume * (self.volume_growth_factor**i)
-                self.place_order("buy", price, volume)
+                if price < self.current_ema:
+                    self.place_order("buy", price, volume)
 
-            for i, price in enumerate(sell_prices):
+            for i, price in enumerate((sell_prices)):
                 volume = base_volume * (self.volume_growth_factor**i)
-                self.place_order("sell", price, volume)
+                if price > self.current_ema:
+                    self.place_order("sell", price, volume)
 
             # Хедж на стартовой сетке
             if len(self.price_history) > 30:
@@ -750,7 +809,8 @@ class OrderManager:
             # ВАЖНО!
             self.check_and_refill_orders()
             self.update_display()
-
+            # Печатаем сетку после создания
+            self.print_orders()
             self.initial_grid_created = True
 
     def should_update_grid(self, executed_order):
@@ -788,7 +848,7 @@ class OrderManager:
 
         # Маржа под неисполненные ордера
         orders_margin = sum(
-            order.volume * order.price * (1 + self.commission_rate) for order in self.orders if not order.executed
+            order.volume * order.price * (1 + MAKER_COMMISSION_RATE) for order in self.orders if not order.executed
         )
 
         # Обновляем свободную маржу

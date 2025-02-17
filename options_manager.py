@@ -1,7 +1,6 @@
 class OptionsManager:
-    def __init__(self, commission_rate=0.00016):
+    def __init__(self):
         self.positions = []
-        self.commission_rate = commission_rate
         self.last_trigger_price = None
         self.options_history = []  # История срабатывания опционов
 
