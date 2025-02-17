@@ -116,6 +116,8 @@ class OrderManager:
         # Добавляем базовый фиксированный объем
         self.base_fixed_volume = 1.0
         self.low_margin_triggered = False
+        self.virtual_grid = {"buy": [], "sell": []}
+
 
     def check_grid_state(self):
         """Проверка состояния сетки и необходимости её обновления"""
@@ -191,13 +193,13 @@ class OrderManager:
 
         for i, price in enumerate((buy_prices)):  # Сначала дальние, потом ближние
             volume = base_volume * (self.volume_growth_factor**i)
-            if price < ema:
+            if price < ema and price < current_price:
                 self.place_order("buy", price, volume)
 
 
         for i, price in enumerate((sell_prices)):
             volume = base_volume * (self.volume_growth_factor**i)
-            if price > ema:
+            if price > ema and price > current_price:
                 self.place_order("sell", price, volume)
 
         self.current_grid_bounds = (min(buy_prices), max(sell_prices))
@@ -453,6 +455,26 @@ class OrderManager:
 
         return volume_per_level
 
+    def sync_orders_with_virtual_grid(self):
+        """Синхронизирует реальные ордера с виртуальной сеткой"""
+        if not self.virtual_grid or not self.current_ema or not self.current_price:
+            return
+
+        active_orders = {order.price: order for order in self.orders if not order.executed}
+        base_volume = self.calculate_base_volume(self.current_price)
+
+        # Buy
+        for price in self.virtual_grid["buy"]:
+            if price not in active_orders and price < self.current_price and price < self.current_ema:
+                self.place_order("buy", price, base_volume)
+
+        # Sell
+        for price in self.virtual_grid["sell"]:
+            if price not in active_orders and price > self.current_price and price > self.current_ema:
+                self.place_order("sell", price, base_volume)
+
+
+
     def place_counter_order(self, executed_order, execution_price):
         """Размещение контр-ордера после исполнения, с тем же объемом, что был у исполненного"""
         if not self.current_grid_bounds:
@@ -466,13 +488,13 @@ class OrderManager:
 
         if executed_order.order_type == "buy":
             new_price = execution_price * (1 + grid_step / 100)
-            if new_price <= upper_bound:
+            if new_price <= upper_bound and new_price > self.current_ema and new_price > self.current_price:
                 self.place_order("sell", new_price, volume)
             else:
                 print(f"Counter sell price {new_price} exceeds upper bound {upper_bound}")
         else:
             new_price = execution_price * (1 - grid_step / 100)
-            if new_price >= lower_bound:
+            if new_price >= lower_bound and new_price < self.current_ema and new_price < self.current_price:
                 self.place_order("buy", new_price, volume)
             else:
                 print(f"Counter buy price {new_price} below lower bound {lower_bound}")
@@ -502,13 +524,13 @@ class OrderManager:
             if len(active_buy_orders) < self.min_orders:
                 for i, price in enumerate((buy_prices)):
                     # Проверяем, нет ли уже ордера на этой цене
-                    if not any(o.price == price for o in active_buy_orders):
+                    if price < self.current_ema and price < self.current_price and not any(o.price == price for o in active_buy_orders):
                         volume = base_volume * (self.volume_growth_factor**i)
                         self.place_order("buy", price, volume)
 
             if len(active_sell_orders) < self.min_orders:
                 for i, price in enumerate((sell_prices)):
-                    if not any(o.price == price for o in active_sell_orders):
+                    if price > self.current_ema and price > self.current_price and not any(o.price == price for o in active_sell_orders):
                         volume = base_volume * (self.volume_growth_factor**i)
                         self.place_order("sell", price, volume)
 
@@ -675,6 +697,7 @@ class OrderManager:
         upper_bound = self.current_ema * (1 + self.grid_step_percent * self.max_orders / 100)
 
         self.current_grid_bounds = (lower_bound, upper_bound)
+        self._build_virtual_grid()  # создаем виртуальные уровни
 
         buy_prices, sell_prices = self.create_asymmetric_grid(
             self.current_ema, current_price, lower_bound, upper_bound, self.grid_step_percent, self.grid_step_percent
@@ -687,12 +710,12 @@ class OrderManager:
 
         for i, price in enumerate((buy_prices)):
             volume = base_volume * (self.volume_growth_factor**i)
-            if price < self.current_ema:
+            if price < self.current_ema and price < self.current_price:
                 self.place_order("buy", price, volume)
 
         for i, price in enumerate((sell_prices)):
             volume = base_volume * (self.volume_growth_factor**i)
-            if price > self.current_ema:
+            if price > self.current_ema and price > self.current_price:
                 self.place_order("sell", price, volume)
 
         if len(self.price_history) > 30:
@@ -714,6 +737,29 @@ class OrderManager:
         self.update_display()
 
         print(f"Created new grid with {len(buy_prices)} buy orders and {len(sell_prices)} sell orders.")
+
+    def _build_virtual_grid(self):
+        """Создает виртуальную сетку buy/sell вокруг текущей EMA"""
+        self.virtual_grid = {"buy": [], "sell": []}
+
+        grid_step = self.grid_step_percent / 100
+
+        # Buy уровни
+        price = self.current_ema
+        while price > self.current_grid_bounds[0]:
+            price *= (1 - grid_step)
+            if price < self.current_ema:
+                self.virtual_grid["buy"].append(price)
+
+        # Sell уровни
+        price = self.current_ema
+        while price < self.current_grid_bounds[1]:
+            price *= (1 + grid_step)
+            if price > self.current_ema:
+                self.virtual_grid["sell"].append(price)
+
+        self.virtual_grid["buy"].reverse()  # Чтобы buy шли от дальних к ближним
+
 
     def get_hedge_metrics(self):
         """
@@ -762,6 +808,7 @@ class OrderManager:
             upper_bound = self.current_price * (1 + self.grid_step_percent * self.max_orders / 100)
 
             self.current_grid_bounds = (lower_bound, upper_bound)
+            self._build_virtual_grid()  # создаем виртуальные уровни
 
             buy_prices, sell_prices = self.create_asymmetric_grid(
                 self.current_ema,
@@ -772,8 +819,8 @@ class OrderManager:
                 self.grid_step_percent,
             )
 
-            buy_prices = buy_prices[: self.min_orders]
-            sell_prices = sell_prices[: self.min_orders]
+            buy_prices = buy_prices[: self.max_orders]
+            sell_prices = sell_prices[: self.max_orders]
 
             if not buy_prices or not sell_prices:
                 print("Error: Failed to generate grid prices!")

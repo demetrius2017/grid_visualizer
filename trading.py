@@ -107,6 +107,7 @@ class TradingSimulator:
 
             # Проверяем и исполняем ордера
             self.order_manager.check_orders(new_price)
+            self.order_manager.sync_orders_with_virtual_grid()
             self.update_display()
 
     def stop(self):
