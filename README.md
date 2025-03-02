@@ -1,8 +1,8 @@
-# Trading Simulator
+# Market Macker
 
 ## Overview
 
-Trading Simulator is a Python-based application that provides a visual and interactive environment for simulating grid trading strategies. It offers real-time market price simulation, dynamic grid order placement, and comprehensive performance tracking.
+Market Macker is a Python-based application that provides a visual and interactive environment for simulating grid trading strategies. It offers real-time market price simulation, dynamic grid order placement, and comprehensive performance tracking.
 
 ## Features
 
@@ -18,8 +18,8 @@ Trading Simulator is a Python-based application that provides a visual and inter
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/trading-simulator.git
-   cd trading-simulator
+   git clone https://github.com/demetrius2017/grid_visualizer.git
+   cd grid_visualizer
    ```
 
 2. Create and activate a virtual environment:
@@ -35,7 +35,7 @@ Trading Simulator is a Python-based application that provides a visual and inter
 
 ## Usage
 
-To start the Trading Simulator:
+To start the Market Macker:
 
 ```
 python main.py
@@ -61,7 +61,7 @@ You can adjust various parameters of the simulation:
 
 ## Contributing
 
-Contributions to the Trading Simulator project are welcome! Please follow these steps:
+Contributions to the Market Macker project are welcome! Please follow these steps:
 
 1. Fork the repository.
 2. Create a new branch for your feature or bug fix.
