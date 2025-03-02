@@ -4,6 +4,12 @@
 
 Market Macker is a Python-based application that provides a visual and interactive environment for simulating grid trading strategies. It offers real-time market price simulation, dynamic grid order placement, and comprehensive performance tracking.
 
+Install App
+Start Simulation
+Use Shift + Mouse to move Price
+Control both windows Graph and Order-Positions
+Try to collect the most profit!
+
 ## Features
 
 - **Real-time Market Simulation**: Simulates market price movements with adjustable volatility.
