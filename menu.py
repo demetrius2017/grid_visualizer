@@ -1,6 +1,7 @@
 from PyQt5 import QtWidgets, QtGui
 from graph import MarketGraph
 from trading import TradingSimulator
+import os
 
 class GridSettingsDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
@@ -77,6 +78,41 @@ class MainWindow(QtWidgets.QMainWindow):
         stop_simulation_action = QtWidgets.QAction("Stop Simulation", self)
         stop_simulation_action.triggered.connect(self.simulator.stop)
         grid_menu.addAction(stop_simulation_action)
+
+        mode_menu = menubar.addMenu("Simulation Mode")
+
+        # Random mode
+        self.random_mode_action = QtWidgets.QAction("Random", self, checkable=True)
+        self.random_mode_action.setChecked(True)
+        self.random_mode_action.triggered.connect(lambda: self.set_simulation_mode("random"))
+        mode_menu.addAction(self.random_mode_action)
+
+        # File submenu
+        self.file_mode_menu = mode_menu.addMenu("From CSV File")
+        self.csv_file_actions = []
+        self.populate_file_menu()
+
+    def populate_file_menu(self):
+        data_dir = os.path.join(os.getcwd(), "data")
+        for filename in os.listdir(data_dir):
+            if filename.endswith(".csv"):
+                action = QtWidgets.QAction(filename, self, checkable=True)
+                action.triggered.connect(lambda checked, f=filename: self.set_csv_file(f))
+                self.file_mode_menu.addAction(action)
+                self.csv_file_actions.append(action)
+
+    def set_simulation_mode(self, mode):
+        self.simulator.simulation_mode = mode
+        self.random_mode_action.setChecked(mode == "random")
+        for action in self.csv_file_actions:
+            action.setChecked(False)
+
+    def set_csv_file(self, filename):
+        self.set_simulation_mode("file")
+        for action in self.csv_file_actions:
+            action.setChecked(action.text() == filename)
+        filepath = os.path.join("data", filename)
+        self.simulator.set_csv_file(filepath)
 
     def open_grid_settings(self):
         dialog = GridSettingsDialog(self)

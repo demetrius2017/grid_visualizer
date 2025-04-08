@@ -26,6 +26,9 @@ class MarketGraph(QtWidgets.QWidget):
         self.graphWidget.setLabel("left", "Price")
         self.graphWidget.setLabel("bottom", "Time")
         self.graphWidget.showGrid(x=True, y=True)
+        # Устанавливаем минимальную высоту для графика, чтобы избежать его исчезновения
+        self.graphWidget.setMinimumHeight(250)
+        self.graphWidget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         splitter.addWidget(self.graphWidget)
 
         # Добавляем горизонтальный ползунок для скроллинга
@@ -163,6 +166,10 @@ class MarketGraph(QtWidgets.QWidget):
             )  # Нормализованный диапазон от 0 до 1
 
     def update_graph(self, price_data):
+        if not price_data:
+            print("[GRAPH] Нет данных для обновления графика")
+            return
+
         if len(price_data) > self.visible_range:
             self.scroll_bar.setMaximum(len(price_data) - self.visible_range)
             self.scroll_bar.setPageStep(self.visible_range)
@@ -172,6 +179,11 @@ class MarketGraph(QtWidgets.QWidget):
         visible_data = price_data[
             self.data_offset : self.data_offset + self.visible_range
         ]
+
+        if not visible_data:
+            print("[GRAPH] Видимые данные отсутствуют")
+            return
+
         self.price_curve.setData(range(len(visible_data)), visible_data)
         self.graphWidget.setXRange(0, len(visible_data))
 
@@ -278,31 +290,127 @@ class MarketGraph(QtWidgets.QWidget):
                 self.graphWidget.setXRange(start_index, len(self.full_price_data))
 
     def update_visible_range(self, value=None):
+        """
+        Полностью переработанный метод обновления видимого диапазона графика
+        с корректной синхронизацией массивов X и Y
+        """
+        import numpy as np
+        
+        if not hasattr(self, 'full_price_data') or not self.full_price_data:
+            print("[GRAPH] Нет данных для отображения")
+            return
+            
+        # Обновляем смещение
         if value is not None:
             self.data_offset = value
         else:
             self.data_offset = max(0, len(self.full_price_data) - self.visible_range)
 
+        # Вычисляем границы видимого диапазона
         end = min(self.data_offset + self.visible_range, len(self.full_price_data))
-        start = max(0, end - self.visible_range)
-
-        visible_data = self.full_price_data[start:end]
-        self.price_curve.setData(range(start, end), visible_data)
-
-        if self.full_ema_data:
-            visible_ema = self.full_ema_data[start:end]
-            self.ema_curve.setData(range(start, end), visible_ema)
-
-        self.update_order_book(
-            self.full_buy_orders,
-            self.full_sell_orders,
-            end - 1,
-            self.full_price_data[-1],
-        )
-        self.update_order_history(self.full_order_history)
+        start = max(0, self.data_offset)
         
-        # Добавляем автоматическое масштабирование после обновления данных
-        self.auto_scale_view()
+        if start >= end:
+            print(f"[GRAPH] Некорректный диапазон: start={start}, end={end}")
+            return
+            
+        # Готовим данные для ценового графика
+        visible_data = self.full_price_data[start:end]
+        
+        # Готовим данные для EMA (если они есть)
+        visible_ema = []
+        if hasattr(self, 'full_ema_data') and self.full_ema_data:
+            if len(self.full_ema_data) >= end:
+                visible_ema = self.full_ema_data[start:end]
+            else:
+                # Если EMA короче, выравниваем длины
+                ema_len = len(self.full_ema_data)
+                visible_ema = self.full_ema_data[max(0, ema_len - (end - start)):]
+                # Дополняем массив NaN-ами в начале, если нужно
+                if len(visible_ema) < len(visible_data):
+                    visible_ema = [np.nan] * (len(visible_data) - len(visible_ema)) + visible_ema
+        
+        # Определяем X-координаты (timestamps или индексы)
+        if hasattr(self, 'timestamps') and self.timestamps:
+            # Если есть временные метки, преобразуем их в timestamp
+            import datetime
+            import time
+            
+            if not hasattr(self, 'numeric_timestamps') or len(self.numeric_timestamps) != len(self.timestamps):
+                self.numeric_timestamps = []
+                for ts in self.timestamps:
+                    try:
+                        dt = datetime.datetime.strptime(ts.split('.')[0], "%Y-%m-%d %H:%M:%S")
+                        self.numeric_timestamps.append(time.mktime(dt.timetuple()))
+                    except Exception as e:
+                        # В случае ошибки используем последний timestamp или 0
+                        self.numeric_timestamps.append(
+                            self.numeric_timestamps[-1] if self.numeric_timestamps else 0
+                        )
+                        
+            # Берем X-координаты из timestamp
+            if len(self.numeric_timestamps) >= end:
+                x_data = self.numeric_timestamps[start:end]
+            else:
+                # Если временных меток меньше, чем цен, используем индексы
+                x_data = list(range(start, end))
+        else:
+            # Если нет временных меток, используем индексы
+            x_data = list(range(start, end))
+            
+        # Синхронизируем длины массивов
+        min_len = min(len(x_data), len(visible_data))
+        if min_len == 0:
+            print("[GRAPH] Нет данных для отображения после синхронизации")
+            return
+            
+        x_data = x_data[:min_len]
+        visible_data = visible_data[:min_len]
+        
+        # Отрисовываем ценовой график
+        self.price_curve.setData(x=x_data, y=visible_data)
+        
+        # Отрисовываем EMA с фильтрацией NaN
+        if visible_ema:
+            # Обрезаем EMA до длины x_data
+            visible_ema = visible_ema[:min_len]
+            
+            # Фильтруем NaN значения
+            valid_indices = [i for i, val in enumerate(visible_ema) if not np.isnan(val)]
+            
+            if valid_indices:
+                x_ema = [x_data[i] for i in valid_indices]
+                y_ema = [visible_ema[i] for i in valid_indices]
+                self.ema_curve.setData(x=x_ema, y=y_ema)
+                self.ema_curve.show()
+            else:
+                self.ema_curve.hide()
+        else:
+            self.ema_curve.hide()
+            
+        # Сохраняем текущую X-позицию для ордеров и сделок
+        self.current_x_position = x_data[-1] if x_data else 0
+        
+        # Обновляем сетку ордеров
+        if hasattr(self, 'full_buy_orders') and hasattr(self, 'full_sell_orders') and hasattr(self, 'full_price_data'):
+            self.update_order_book(
+                self.full_buy_orders,
+                self.full_sell_orders,
+                current_time=self.current_x_position,
+                current_price=self.full_price_data[-1] if self.full_price_data else 0
+            )
+            
+        # Обновляем историю сделок
+        if hasattr(self, 'full_order_history'):
+            self.update_order_history(self.full_order_history)
+            
+        # Обновляем масштаб графика
+        if len(x_data) > 1:
+            self.graphWidget.setXRange(x_data[0], x_data[-1])
+            
+        # Принудительное обновление
+        self.graphWidget.update()
+        print(f"[GRAPH] Обновлен график: {len(x_data)} точек, X: {x_data[0]} → {x_data[-1]}")
 
     def update_order_book(self, buy_orders, sell_orders, current_time, current_price):
         # Фильтруем ордера в видимом диапазоне
@@ -366,26 +474,39 @@ class MarketGraph(QtWidgets.QWidget):
         sell_orders,
         order_history,
         distribution_data,
+        timestamps=None
     ):
+        """
+        Полностью переработанный метод для инициализации и обновления данных графика
+        с корректной синхронизацией длин массивов x и y.
+        """
+        if not price_data:
+            print("[GRAPH] Получены пустые данные цены, график не будет обновлён.")
+            return
+
+        # Сохраняем оригинальные данные
         self.full_price_data = price_data
         self.full_ema_data = ema_data
         self.full_buy_orders = buy_orders
         self.full_sell_orders = sell_orders
         self.full_order_history = order_history
+        self.timestamps = timestamps
 
-        if len(price_data) > self.visible_range:
-            self.data_offset = max(0, len(price_data) - self.visible_range)
-            self.scroll_bar.setMaximum(self.data_offset)
-            self.scroll_bar.setPageStep(self.visible_range)
-        else:
-            self.data_offset = 0
-            self.scroll_bar.setMaximum(0)
+        # Ограничиваем размер данных видимым диапазоном
+        visible_range = min(self.visible_range, len(price_data))
+        
+        # Устанавливаем отображение в конец данных
+        self.data_offset = max(0, len(price_data) - visible_range)
+        self.scroll_bar.setMaximum(max(0, len(price_data) - visible_range))
+        self.scroll_bar.setPageStep(visible_range)
+        self.scroll_bar.setValue(self.data_offset)
 
-        self.update_visible_range(self.data_offset)
-        # Добавляем автоматическое масштабирование
-        self.auto_scale_view()
-        self.distribution_data = distribution_data
+        # Обновляем все графики и данные
         self.update_distribution_chart()
+        
+        # Принудительно вызываем обновление видимой области
+        # с правильным смещением для отображения последних данных
+        self.update_visible_range(self.data_offset)
 
     def update_hedge_info(self, active_options, current_price):
         """

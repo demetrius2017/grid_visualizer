@@ -515,7 +515,6 @@ class OrderManager:
 
         # Если ордеров меньше минимального количества, добавляем новые
         if len(active_buy_orders) < self.min_orders or len(active_sell_orders) < self.min_orders:
-            # print("Refilling orders due to low count")
             lower_bound, upper_bound = self.current_grid_bounds
             buy_step = self.calculate_dynamic_grid_step("buy")
             sell_step = self.calculate_dynamic_grid_step("sell")
@@ -525,18 +524,16 @@ class OrderManager:
             )
 
             # Добавляем недостающие ордера
-            base_volume = self.base_fixed_volume * (self.volume_growth_factor**i)
             if len(active_buy_orders) < self.min_orders:
-                for i, price in enumerate((buy_prices)):
-                    # Проверяем, нет ли уже ордера на этой цене
+                for i, price in enumerate(buy_prices):
                     if price < self.current_ema and price < self.current_price and not any(o.price == price for o in active_buy_orders):
-                        volume = base_volume * (self.volume_growth_factor**i)
+                        volume = self.base_fixed_volume * (self.volume_growth_factor**i)
                         self.place_order("buy", price, volume)
 
             if len(active_sell_orders) < self.min_orders:
-                for i, price in enumerate((sell_prices)):
+                for i, price in enumerate(sell_prices):
                     if price > self.current_ema and price > self.current_price and not any(o.price == price for o in active_sell_orders):
-                        volume = base_volume * (self.volume_growth_factor**i)
+                        volume = self.base_fixed_volume * (self.volume_growth_factor**i)
                         self.place_order("sell", price, volume)
 
 
@@ -739,7 +736,7 @@ class OrderManager:
         self.hedge_active = True
 
         self.check_and_refill_orders()
-        self.update_display()
+        # self.update_display()
 
         print(f"Created new grid with {len(buy_prices)} buy orders and {len(sell_prices)} sell orders.")
 
@@ -784,10 +781,10 @@ class OrderManager:
 
         return position_risk - hedge_exposure  # Чистый риск с учетом хеджа
 
-    def update_display(self):
-        # Этот метод будет вызывать обновление графика
-        # Его реализацию нужно добавить в TradingSimulator
-        pass
+    # def update_display(self):
+    #     # Этот метод будет вызывать обновление графика
+    #     # Его реализацию нужно добавить в TradingSimulator
+    #     pass
 
     def calculate_dynamic_grid_step(self, order_type):
         if order_type == "buy":
@@ -860,7 +857,7 @@ class OrderManager:
 
             # ВАЖНО!
             self.check_and_refill_orders()
-            self.update_display()
+            # self.update_display()
             # Печатаем сетку после создания
             self.print_orders()
             self.initial_grid_created = True
