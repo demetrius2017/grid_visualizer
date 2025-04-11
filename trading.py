@@ -76,25 +76,35 @@ class TradingSimulator:
         self.positions_timer.timeout.connect(self.update_positions_window)
 
     def start(self):
-        """Запуск симуляции с предварительной инициализацией EMA"""
+        """Запуск симуляции с корректной инициализацией EMA"""
         try:
             self.stop_simulation = False
 
             # Генерация начальных данных для EMA
             print(f"Generating initial data for EMA calculation (period={self.ema_period})")
             if self.simulation_mode == "file" and self.file_prices:
+                # Для данных из файла берем реальные цены
                 self.prices = [price for _, price, _ in self.file_prices[:self.ema_period]]
                 self.current_price = self.prices[-1]
             else:
-                while len(self.prices) < self.ema_period:
-                    new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
+                # Для случайной генерации начинаем с текущей цены
+                start_price = self.current_price if self.current_price else 0.5
+                self.prices = [start_price]
+                # Генерируем начальные цены для EMA
+                for _ in range(self.ema_period - 1):
+                    new_price = max(0.001, self.prices[-1] * (1 + np.random.normal(0, self.volatility)))
                     self.prices.append(new_price)
-                    self.current_price = new_price
+                self.current_price = self.prices[-1]
 
-            # Рассчитываем начальное значение EMA
-            initial_ema = np.mean(self.prices[-self.ema_period:])
-            self.ema.append(initial_ema)
-            print(f"Initial EMA calculated: {initial_ema}")
+            # Рассчитываем начальное значение EMA как среднее первых self.ema_period цен
+            # Это обеспечит плавный старт EMA с реальных значений
+            if len(self.prices) >= self.ema_period:
+                initial_ema = np.mean(self.prices[-self.ema_period:])
+            else:
+                initial_ema = self.prices[-1]  # Если недостаточно данных, берем последнюю цену
+                
+            self.ema = [initial_ema]
+            print(f"Initial EMA calculated: {initial_ema} from price data")
 
             # Обновляем данные в OrderManager
             self.order_manager.current_ema = initial_ema
@@ -233,13 +243,19 @@ class TradingSimulator:
             if len(self.prices) >= self.ema_period:
                 k = 2 / (self.ema_period + 1)
                 if not self.ema:
-                    self.ema.append(np.mean(self.prices[-self.ema_period:]))
+                    # Используем начальное значение как среднее первых ema_period цен
+                    initial_ema = np.mean(self.prices[-self.ema_period:])
+                    self.ema.append(initial_ema)
+                    print(f"Starting EMA from actual price average: {initial_ema:.8f}")
                 else:
+                    # Обычный расчет EMA
                     new_ema = self.current_price * k + self.ema[-1] * (1 - k)
                     self.ema.append(new_ema)
                 self.order_manager.current_ema = self.ema[-1]
-            else:
-                self.ema.append(self.current_price)
+            elif len(self.prices) > 0:
+                # Если данных меньше чем ema_period, используем среднее имеющихся цен
+                self.ema.append(np.mean(self.prices))
+                self.order_manager.current_ema = self.ema[-1]
 
             # Обновляем историю в OrderManager
             self.order_manager.price_history = self.prices
