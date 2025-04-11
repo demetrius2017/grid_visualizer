@@ -94,9 +94,18 @@ class PositionsWindow(QtWidgets.QWidget):
         current_price,
         active_options=None,
         options_history=None,
+        balance=None,
+        free_margin=None,
+        floating_profit=None,
+        open_orders_count=None,
+        total_trades_count=None
     ):
         # Обновление открытых позиций
         self.open_positions_table.setRowCount(len(open_positions))
+        
+        # Рассчитываем сумму floating profit из открытых позиций
+        total_positions_floating_profit = 0.0
+        
         for i, position in enumerate(open_positions):
             self.open_positions_table.setItem(i, 0, QtWidgets.QTableWidgetItem(position.order_type))
             self.open_positions_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{position.entry_price:.8f}"))
@@ -104,6 +113,9 @@ class PositionsWindow(QtWidgets.QWidget):
             self.open_positions_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{position.floating_profit:.8f}"))
             self.open_positions_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{current_price:.8f}"))
             self.open_positions_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{position.commission:.8f}"))
+            
+            # Суммируем floating profit из позиций
+            total_positions_floating_profit += position.floating_profit
 
         # Обновление закрытых позиций
         self.closed_positions_table.setRowCount(len(closed_positions))
@@ -168,21 +180,64 @@ class PositionsWindow(QtWidgets.QWidget):
         # Обновление общей сводки с информацией о марже
         total_profit = sum(position.profit for position in closed_positions)
         total_commission = sum(position.commission for position in closed_positions)
-        floating_profit = sum(position.floating_profit for position in open_positions)
+        
+        # Используем переданное значение floating_profit если оно есть, 
+        # иначе используем сумму из открытых позиций
+        if floating_profit is None:
+            floating_profit = total_positions_floating_profit
+            
+        # Проверка на несоответствие суммы по позициям и общей суммы
+        if abs(floating_profit - total_positions_floating_profit) > 0.000001:
+            print(f"WARNING: Floating profit mismatch: Positions sum={total_positions_floating_profit:.8f}, Total={floating_profit:.8f}")
+            # Выводим предупреждение, но используем общую сумму из OrderManager
+            
         net_profit = total_profit - total_commission
 
-        # Получаем информацию о марже из последней позиции (если есть)
-        margin_info = ""
-        if hasattr(position, 'margin_required'):
-            margin_info = f"\nRequired Margin: {position.margin_required:.8f}"
+        # Создаем более заметный блок информации с помощью разделителей
+        summary_text = []
+        summary_text.append("=" * 40)
+        summary_text.append("ТОРГОВАЯ СТАТИСТИКА")
+        summary_text.append("=" * 40)
+        
+        # Количество открытых ордеров и общее количество сделок
+        if open_orders_count is not None:
+            summary_text.append(f"Открытых ордеров: {open_orders_count}")
+        else:
+            summary_text.append(f"Открытых ордеров: {len(open_positions)}")
+            
+        if total_trades_count is not None:
+            summary_text.append(f"Общее количество сделок: {total_trades_count}")
+        else:
+            summary_text.append(f"Закрытых сделок: {len(closed_positions)}")
+            
+        summary_text.append("-" * 40)
+        
+        # Основная информация о прибыли и убытках
+        summary_text.append(f"Чистая прибыль (с учетом комиссий): {net_profit:.8f}")
+        summary_text.append(f"Валовая прибыль: {total_profit:.8f}")
+        summary_text.append(f"Плавающая прибыль/убыток: {floating_profit:.8f}")
+        summary_text.append(f"Общая комиссия: {total_commission:.8f}")
+        
+        # Добавляем разделитель
+        summary_text.append("-" * 40)
+        
+        # Информация о балансе и марже (важные данные!)
+        # Выделяем эту информацию, чтобы она была хорошо заметна
+        if balance is not None:
+            summary_text.append(f"БАЛАНС: {balance:.8f}")
+        else:
+            summary_text.append("БАЛАНС: Нет данных")
+            
+        if free_margin is not None:
+            summary_text.append(f"СВОБОДНАЯ МАРЖА: {free_margin:.8f}")
+        else:
+            summary_text.append("СВОБОДНАЯ МАРЖА: Нет данных")
+            
+        # Заключительный разделитель
+        summary_text.append("=" * 40)
 
-        self.summary_label.setText(
-            f"Net Profit (including commission): {net_profit:.8f}\n"
-            f"Gross Profit: {total_profit:.8f}\n"
-            f"Current Floating P/L: {floating_profit:.8f}\n"
-            f"Total Commission: {total_commission:.8f}"
-            f"{margin_info}"
-        )
+        # Обновляем текст сводки
+        self.summary_label.setText("\n".join(summary_text))
 
     def clear(self):
         self.open_positions_table.setRowCount(0)

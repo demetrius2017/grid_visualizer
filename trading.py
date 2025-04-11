@@ -470,19 +470,30 @@ class TradingSimulator:
         # Получаем актуальные данные о балансе и марже
         current_balance = self.order_manager.get_balance()
         free_margin = self.order_manager.get_free_margin()
-        used_margin = current_balance - free_margin
+        
+        # Получаем общую плавающую прибыль 
+        floating_profit = self.order_manager.calculate_floating_profit(self.current_price)
+        
+        # Получаем количество открытых ордеров и общее количество сделок
+        open_orders_count = self.order_manager.get_open_orders_count()
+        total_trades_count = self.order_manager.get_total_trades_count()
         
         # Получаем информацию о хедже
         active_options = self.order_manager.options_manager.active_options
         options_history = self.order_manager.options_manager.options_history[-50:]  # Последние 50 операций
         
-        # Обновляем окно позиций
+        # Обновляем окно позиций с передачей всех необходимых параметров
         self.positions_window.update_positions(
             open_positions,
             closed_positions,
             self.current_price,
             active_options,
-            options_history
+            options_history,
+            balance=current_balance,
+            free_margin=free_margin,
+            floating_profit=floating_profit,
+            open_orders_count=open_orders_count,
+            total_trades_count=total_trades_count
         )
 
     def mouse_moved(self, evt):

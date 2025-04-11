@@ -6,14 +6,14 @@ from options_manager import OptionsManager
 
 
 # Константы для комиссий Binance
-MAKER_COMMISSION_RATE = 0.0002  # 0.02%
-TAKER_COMMISSION_RATE = 0.0005  # 0.05%
-MIN_VOLUME_THRESHOLD = 0.01
+MAKER_COMMISSION_RATE = 0.002  # 0.02%
+TAKER_COMMISSION_RATE = 0.005  # 0.05%
+MIN_VOLUME_THRESHOLD = 0.1
 
 
 class Position:
     def __init__(self, order_type, price, volume, is_maker=True):
-        self.order_type = order_type  # buy или sell
+        self.order_type = order_type  # buy or sell
         self.entry_price = price
         self.volume = volume
         self.floating_profit = 0
@@ -34,7 +34,7 @@ class Position:
         return 0
 
     def close_position(self, exit_price, is_maker=True):
-        """Закрывает позицию с расчетом финальной прибыли"""
+        """Закрывает позицию с расчетом финальной прибыли and высвобождением маржи"""
         if not self.closed:
             self.exit_price = exit_price
             self.closed = True
@@ -51,6 +51,14 @@ class Position:
 
             # Обнуляем плавающую прибыль при закрытии
             self.floating_profit = 0
+            
+            # Формально позиция закрыта, поэтому освобождаем маржу
+            # Для более корректного сообщения логируем освобождение
+            released_margin = self.margin
+            self.margin = 0
+            
+            logger = logging.getLogger("grid_visualizer")
+            logger.info(f"[POSITION] Position closed: {self.order_type}, profit={self.profit:.8f}, released margin={released_margin:.8f}")
             
             return self.profit
         return 0
@@ -147,7 +155,7 @@ class OrderManager:
 
 
     def check_grid_state(self):
-        """Проверка состояния сетки и необходимости её обновления"""
+        """Проверка состояния сетки and необходимости её обновления"""
         if self.options_manager.last_trigger_price:
             return False
 
@@ -194,7 +202,7 @@ class OrderManager:
         return False
 
     def update_grid(self, ema, current_price, price_history):
-        """Простое обновление сетки ордеров: удаляем старые, создаем ровно min_orders вверх и вниз"""
+        """Простое обновление сетки ордеров: удаляем старые, создаем ровно min_orders вверх and вниз"""
         print(f"Updating grid at price {current_price}, EMA: {ema}")
 
         # Сохраняем текущее значение EMA
@@ -255,7 +263,7 @@ class OrderManager:
         # Находим максимальное значение плотности вероятности
         max_density = max(max(hist), max(normal_dist))
 
-        # Нормализуем гистограмму и нормальное распределение
+        # Нормализуем гистограмму and нормальное распределение
         hist_normalized = hist / max_density
         normal_dist_normalized = normal_dist / max_density
 
@@ -300,14 +308,14 @@ class OrderManager:
         # Рассчитываем минимальный шаг сетки
         min_step = current_price * (self.grid_step_percent / 100)
 
-        # Рассчитываем расстояние от текущей цены до исторического максимума и минимума
+        # Рассчитываем расстояние от текущей цены до исторического максимума and минимума
         distance_to_max = (hist_max - current_price) / current_price
         distance_to_min = (current_price - hist_min) / current_price
 
-        # # Устанавливаем верхнюю и нижнюю границы сетки
+        # # Устанавливаем верхнюю and нижнюю границы сетки
         # upper_bound = ema * (1 + max(distance_to_min, self.min_grid_coverage))
         # lower_bound = ema * (1 - max(distance_to_max, self.min_grid_coverage))
-        # Устанавливаем верхнюю и нижнюю границы сетки
+        # Устанавливаем верхнюю and нижнюю границы сетки
         upper_bound = current_price + min_step * self.max_orders
         lower_bound = current_price - min_step * self.max_orders
 
@@ -482,7 +490,7 @@ class OrderManager:
             self.low_margin_triggered = True
         else:
             self.low_margin_triggered = False
-        # Берем максимум из рассчитанного и минимального объема
+        # Берем максимум из рассчитанного and минимального объема
         base_volume = max(margin_based_volume, min_base_volume)
 
         # print(f"Calculated base volume: {base_volume:.8f}")
@@ -493,7 +501,7 @@ class OrderManager:
         total_volume = self.free_margin * 0.5 / current_price  # Используем 50% свободной маржи для всей сетки
 
         # Делим общий объем на количество уровней сетки
-        volume_per_level = total_volume / (self.grid_size * 2)  # Умножаем на 2, так как у нас buy и sell ордера
+        volume_per_level = total_volume / (self.grid_size * 2)  # Умножаем на 2, так как у нас buy and sell ордера
 
         return volume_per_level
 
@@ -518,7 +526,7 @@ class OrderManager:
 
 
     def place_counter_order(self, executed_order, execution_price):
-        """Размещение контр-ордера после исполнения и закрытие соответствующей позиции"""
+        """Размещение контр-ордера после исполнения and закрытие соответствующей позиции"""
         if not self.current_grid_bounds:
             print("Error: No grid bounds set")
             return
@@ -541,7 +549,7 @@ class OrderManager:
                 self.closed_positions.append(position)
                 self.positions.remove(position)
                 
-                # Обновляем баланс и маржу
+                # Обновляем баланс and маржу
                 self.balance += profit
                 self.calculate_free_margin()
                 break
@@ -560,7 +568,7 @@ class OrderManager:
         self.calculate_floating_profit(self.current_price)
 
     def check_and_refill_orders(self):
-        """Проверка и добавление ордеров, если их недостаточно"""
+        """Проверка and добавление ордеров, если их недостаточно"""
         if not self.current_grid_bounds:
             return
 
@@ -612,7 +620,7 @@ class OrderManager:
         return lower_bound, upper_bound
 
     def check_orders(self, current_price, timestamp):
-        """Проверяет и исполняет подходящие ордера с учетом временной метки"""
+        """Проверяет and исполняет подходящие ордера с учетом временной метки"""
         executed_any = False
         self.current_price = current_price  # Обновляем текущую цену
         
@@ -646,7 +654,7 @@ class OrderManager:
                 # Иначе просто добавляем недостающие ордера
                 self.check_and_refill_orders()
             
-            # Обновляем маржу и другие показатели
+            # Обновляем маржу and другие показатели
             self.calculate_floating_profit(current_price)
             self.calculate_free_margin()
             
@@ -664,7 +672,7 @@ class OrderManager:
                 position = Position(order.order_type, order.price, order.volume, order.is_maker)
                 self.positions.append(position)
                 
-                # Обновляем баланс и комиссию
+                # Обновляем баланс and комиссию
                 self.balance -= order.commission
                 self.total_commission += order.commission
                 
@@ -703,7 +711,7 @@ class OrderManager:
                 if (order.order_type == "buy" and price_range[0] <= order.price <= price_range[1]) or (
                     order.order_type == "sell" and price_range[0] <= order.price <= price_range[1]
                 ):
-                    # Определяем, является ли ордер мейкером или тейкером
+                    # Определяем, является ли ордер мейкером or тейкером
                     is_maker = abs(order.price - current_price) < 0.0001
                     self.execute_order(order, order.price, is_maker)
 
@@ -712,10 +720,10 @@ class OrderManager:
         base_volume = self.calculate_base_volume(self.current_price)
         total_volume = 0
 
-        # Считаем объем для buy и sell сторон
+        # Считаем объем для buy and sell сторон
         for i in range(self.max_orders):
             volume = base_volume * (self.volume_growth_factor**i)
-            total_volume += volume * 2  # умножаем на 2, так как у нас buy и sell стороны
+            total_volume += volume * 2  # умножаем на 2, так как у нас buy and sell стороны
 
         print(f"Estimated total grid volume: {total_volume:.8f}")
         return total_volume
@@ -837,7 +845,7 @@ class OrderManager:
 
     def initialize_grid(self):
         """Инициализация первоначальной торговой сетки"""
-        # Проверяем, разрешено ли создание ордеров и не создана ли уже сетка
+        # Проверяем, разрешено ли создание ордеров and не создана ли уже сетка
         if not self.orders_enabled:
             print("Grid initialization skipped: orders not enabled")
             return
@@ -947,7 +955,7 @@ class OrderManager:
         else:
             print(f"WARNING: Not enough margin for hedge. Required: {hedge_position['total_cost']:.8f}, Available: {self.free_margin * 0.2:.8f}")
 
-        # Проверяем и дополняем ордера, если необходимо
+        # Проверяем and дополняем ордера, если необходимо
         self.check_and_refill_orders()
         
         # Выводим информацию о текущей сетке
@@ -960,7 +968,7 @@ class OrderManager:
 
     def should_update_grid(self, executed_order):
         # Определение, нужно ли обновлять сетку на основе условий исполнения ордера
-        # Например, можно проверить, достиг ли рынок определенных критериев или настроек
+        # Например, можно проверить, достиг ли рынок определенных критериев or настроек
         return True  # По умолчанию всегда обновлять после исполнения
 
     def calculate_total_commission(self):
@@ -985,7 +993,7 @@ class OrderManager:
 
     def calculate_free_margin(self):
         """
-        Расчет свободной маржи с учетом всех открытых позиций и ордеров
+        Расчет свободной маржи с учетом всех открытых позиций and ордеров
         Free Margin = Balance + Floating Profit - Used Margin (positions) - Used Margin (orders)
         """
         # Маржа используемая открытыми позициями
@@ -1011,10 +1019,32 @@ class OrderManager:
         return self.order_history
 
     def get_open_positions(self):
-        return self.positions
+        """Возвращает список открытых позиций"""
+        return [pos for pos in self.positions if not pos.closed]
 
     def get_closed_positions(self):
+        """Возвращает список закрытых позиций"""
         return self.closed_positions
+
+    def get_open_orders_count(self):
+        """Возвращает количество активных (неисполненных) ордеров"""
+        return len([order for order in self.orders if not order.executed])
+
+    def get_total_trades_count(self):
+        """Возвращает общее количество завершенных сделок"""
+        return len(self.closed_positions) + len(self.executed_orders_history)
+        
+    def calculate_floating_profit(self, current_price):
+        """Пересчитывает плавающую прибыль для всех открытых позиций"""
+        total_floating_profit = 0
+        for position in self.positions:
+            if not position.closed:
+                floating_profit = position.update_floating_profit(current_price)
+                total_floating_profit += floating_profit
+        
+        # Обновляем общую плавающую прибыль
+        self.floating_profit = total_floating_profit
+        return total_floating_profit
 
     def get_total_profit(self):
         self.total_profit = sum(position.profit for position in self.closed_positions)
@@ -1050,19 +1080,3 @@ class OrderManager:
             self.place_order("buy", price, volume)
         for price in sell_prices:
             self.place_order("sell", price, volume)
-
-    def calculate_floating_profit(self, current_price):
-        """
-        Расчет плавающей прибыли по всем открытым позициям
-        """
-        # Сохраняем текущую цену для других расчетов
-        self.current_price = current_price
-
-        # Считаем плавающую прибыль по всем открытым позициям
-        self.floating_profit = sum(pos.update_floating_profit(current_price) for pos in self.positions)
-
-        # print(f"\nFloating profit calculation at price {current_price:.8f}:")
-        # print(f"Number of open positions: {len(self.positions)}")
-        # print(f"Total floating profit: {self.floating_profit:.8f}")
-
-        return self.floating_profit
