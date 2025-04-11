@@ -80,6 +80,11 @@ class TradingSimulator:
         try:
             self.stop_simulation = False
 
+            # Создаем и показываем окно позиций
+            if self.positions_window is None:
+                self.positions_window = PositionsWindow()
+            self.positions_window.show()
+
             # Генерация начальных данных для EMA
             print(f"Generating initial data for EMA calculation (period={self.ema_period})")
             if self.simulation_mode == "file" and self.file_prices:
@@ -403,29 +408,33 @@ class TradingSimulator:
         self.graph.update_orders(buy_orders, sell_orders)
 
     def update_positions_window(self):
-        # Проверяем что окно существует и видимо прежде чем обновлять
-        if self.positions_window is None or not self.positions_window.isVisible():
-            return
-
-        # Ограничиваем частоту обновления в зависимости от объема данных
-        if len(self.prices) > 1000 and self.update_counter % 3 != 0:
-            return  # Пропускаем каждые 2 из 3 обновлений при большом объеме данных
+        """Обновляет окно позиций с актуальной информацией"""
+        
+        # Создаем окно, если оно еще не существует
+        if self.positions_window is None:
+            self.positions_window = PositionsWindow()
+            self.positions_window.show()
             
-        # Получаем данные только если окно видимо
+        # Получаем данные о позициях
         open_positions = self.order_manager.get_open_positions()
-        closed_positions = self.order_manager.get_closed_positions()[-100:]  # Ограничиваем историю
+        closed_positions = self.order_manager.get_closed_positions()[-100:]  # Последние 100 закрытых позиций
         
-        # Использование более эффективной передачи данных
+        # Получаем актуальные данные о балансе и марже
+        current_balance = self.order_manager.get_balance()
+        free_margin = self.order_manager.get_free_margin()
+        used_margin = current_balance - free_margin
+        
+        # Получаем информацию о хедже
         active_options = self.order_manager.options_manager.active_options
-        options_history = self.order_manager.options_manager.options_history[-50:]  # Ограничиваем историю
+        options_history = self.order_manager.options_manager.options_history[-50:]  # Последние 50 операций
         
-        # Обновляем окно
+        # Обновляем окно позиций
         self.positions_window.update_positions(
             open_positions,
             closed_positions,
             self.current_price,
             active_options,
-            options_history,
+            options_history
         )
 
     def mouse_moved(self, evt):

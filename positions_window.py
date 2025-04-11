@@ -164,15 +164,24 @@ class PositionsWindow(QtWidgets.QWidget):
                 f"Total Payouts: {total_payout:.8f}\n"
                 f"Net Result: {net_result:.8f}"
             )
-        # Обновление общей сводки
+            
+        # Обновление общей сводки с информацией о марже
         total_profit = sum(position.profit for position in closed_positions)
         total_commission = sum(position.commission for position in closed_positions)
+        floating_profit = sum(position.floating_profit for position in open_positions)
         net_profit = total_profit - total_commission
 
+        # Получаем информацию о марже из последней позиции (если есть)
+        margin_info = ""
+        if hasattr(position, 'margin_required'):
+            margin_info = f"\nRequired Margin: {position.margin_required:.8f}"
+
         self.summary_label.setText(
-            f"Total Profit (including commission): {net_profit:.8f}\n"
+            f"Net Profit (including commission): {net_profit:.8f}\n"
             f"Gross Profit: {total_profit:.8f}\n"
+            f"Current Floating P/L: {floating_profit:.8f}\n"
             f"Total Commission: {total_commission:.8f}"
+            f"{margin_info}"
         )
 
     def clear(self):

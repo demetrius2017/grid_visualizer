@@ -1,6 +1,7 @@
 import uuid
 import numpy as np
 from scipy import stats
+import logging
 from options_manager import OptionsManager
 
 
@@ -12,34 +13,47 @@ MIN_VOLUME_THRESHOLD = 0.01
 
 class Position:
     def __init__(self, order_type, price, volume, is_maker=True):
-        self.order_type = order_type
+        self.order_type = order_type  # buy или sell
         self.entry_price = price
         self.volume = volume
         self.floating_profit = 0
         self.closed = False
         self.exit_price = None
         self.profit = 0
-        # Используем соответствующую комиссию в зависимости от типа ордера
+        self.margin = price * volume  # Используемая маржа
         self.commission = price * volume * (MAKER_COMMISSION_RATE if is_maker else TAKER_COMMISSION_RATE)
 
     def update_floating_profit(self, current_price):
-        if self.order_type == "buy":
-            self.floating_profit = (current_price - self.entry_price) * self.volume
-        else:  # sell
-            self.floating_profit = (self.entry_price - current_price) * self.volume
-        return self.floating_profit
+        """Обновляет плавающую прибыль позиции"""
+        if not self.closed:
+            if self.order_type == "buy":
+                self.floating_profit = (current_price - self.entry_price) * self.volume
+            else:  # sell
+                self.floating_profit = (self.entry_price - current_price) * self.volume
+            return self.floating_profit
+        return 0
 
     def close_position(self, exit_price, is_maker=True):
-        self.exit_price = exit_price
-        exit_commission = exit_price * self.volume * (MAKER_COMMISSION_RATE if is_maker else TAKER_COMMISSION_RATE)
-        total_commission = self.commission + exit_commission
+        """Закрывает позицию с расчетом финальной прибыли"""
+        if not self.closed:
+            self.exit_price = exit_price
+            self.closed = True
+            
+            # Комиссия за закрытие позиции
+            exit_commission = exit_price * self.volume * (MAKER_COMMISSION_RATE if is_maker else TAKER_COMMISSION_RATE)
+            total_commission = self.commission + exit_commission
 
-        if self.order_type == "buy":
-            self.profit = (exit_price - self.entry_price) * self.volume - total_commission
-        else:  # sell
-            self.profit = (self.entry_price - exit_price) * self.volume - total_commission
-        self.closed = True
-        return self.profit
+            # Расчет прибыли с учетом комиссий
+            if self.order_type == "buy":
+                self.profit = (exit_price - self.entry_price) * self.volume - total_commission
+            else:  # sell
+                self.profit = (self.entry_price - exit_price) * self.volume - total_commission
+
+            # Обнуляем плавающую прибыль при закрытии
+            self.floating_profit = 0
+            
+            return self.profit
+        return 0
 
 
 class Order:
@@ -481,28 +495,46 @@ class OrderManager:
 
 
     def place_counter_order(self, executed_order, execution_price):
-        """Размещение контр-ордера после исполнения, с тем же объемом, что был у исполненного"""
+        """Размещение контр-ордера после исполнения и закрытие соответствующей позиции"""
         if not self.current_grid_bounds:
             print("Error: No grid bounds set")
             return
 
         lower_bound, upper_bound = self.current_grid_bounds
         grid_step = self.calculate_dynamic_grid_step("sell" if executed_order.order_type == "buy" else "buy")
+        volume = executed_order.volume
 
-        volume = executed_order.volume  # Вот тут фиксируем объем как у исполнившегося ордера
+        # Сначала закрываем существующую позицию
+        for position in self.positions[:]:  # Используем срез для безопасного изменения списка
+            if (position.order_type == "buy" and executed_order.order_type == "sell" or
+                position.order_type == "sell" and executed_order.order_type == "buy") and \
+               position.volume == volume and not position.closed:
+                
+                # Закрываем позицию
+                profit = position.close_position(execution_price)
+                self.total_profit += profit
+                
+                # Перемещаем в закрытые позиции
+                self.closed_positions.append(position)
+                self.positions.remove(position)
+                
+                # Обновляем баланс и маржу
+                self.balance += profit
+                self.calculate_free_margin()
+                break
 
+        # Затем размещаем новый контр-ордер
         if executed_order.order_type == "buy":
             new_price = execution_price * (1 + grid_step / 100)
             if new_price <= upper_bound and new_price > self.current_ema and new_price > self.current_price:
                 self.place_order("sell", new_price, volume)
-            else:
-                print(f"Counter sell price {new_price} exceeds upper bound {upper_bound}")
         else:
             new_price = execution_price * (1 - grid_step / 100)
             if new_price >= lower_bound and new_price < self.current_ema and new_price < self.current_price:
                 self.place_order("buy", new_price, volume)
-            else:
-                print(f"Counter buy price {new_price} below lower bound {lower_bound}")
+                
+        # Обновляем плавающую прибыль
+        self.calculate_floating_profit(self.current_price)
 
     def check_and_refill_orders(self):
         """Проверка и добавление ордеров, если их недостаточно"""
@@ -558,35 +590,40 @@ class OrderManager:
 
     def check_orders(self, current_price, timestamp):
         """Проверяет и исполняет подходящие ордера с учетом временной метки"""
+        executed_any = False
+        
         for order in self.orders[:]:  # Копируем список для безопасного удаления элементов
             if not order.executed:
+                order_executed = False
+                
                 if order.order_type == "buy" and current_price <= order.price:
-                    # Исполняем ордер с сохранением временной метки
-                    order.execution_price = current_price
-                    order.execution_time = timestamp
-                    order.executed = True
-                    # Добавляем в историю
-                    self.order_history.append(order)
-                    # Логируем исполнение
-                    self.logger.info(
-                        f"[ORDER] Executed BUY order at {current_price:.8f}, "
-                        f"time={timestamp}, commission={order.commission:.8f}"
-                    )
+                    order_executed = self.execute_order(order, current_price, timestamp)
+                    if order_executed:
+                        self.consecutive_buys += 1
+                        self.consecutive_sells = 0
+                        executed_any = True
+                        # Обновляем плавающую прибыль после исполнения
+                        self.calculate_floating_profit(current_price)
+                        
                 elif order.order_type == "sell" and current_price >= order.price:
-                    # Исполняем ордер с сохранением временной метки
-                    order.execution_price = current_price
-                    order.execution_time = timestamp
-                    order.executed = True
-                    # Добавляем в историю
-                    self.order_history.append(order)
-                    # Логируем исполнение
-                    self.logger.info(
-                        f"[ORDER] Executed SELL order at {current_price:.8f}, "
-                        f"time={timestamp}, commission={order.commission:.8f}"
-                    )
-                    
+                    order_executed = self.execute_order(order, current_price, timestamp)
+                    if order_executed:
+                        self.consecutive_sells += 1
+                        self.consecutive_buys = 0
+                        executed_any = True
+                        # Обновляем плавающую прибыль после исполнения
+                        self.calculate_floating_profit(current_price)
+
         # Очищаем список ордеров от исполненных
         self.orders = [order for order in self.orders if not order.executed]
+        
+        # Если были исполнены ордера, обновляем сетку
+        if executed_any:
+            # Обновляем маржу и другие показатели
+            self.calculate_free_margin()
+            self.check_and_refill_orders()
+            
+        return executed_any  # Возвращаем флаг, были ли исполнены ордера
 
     def execute_order(self, order, price, timestamp):
         """Исполняет ордер с сохранением временной метки"""
@@ -596,12 +633,22 @@ class OrderManager:
                 order.execution_time = timestamp
                 order.executed = True
                 
+                # Создаем новую позицию
+                position = Position(order.order_type, order.price, order.volume, order.is_maker)
+                self.positions.append(position)
+                
                 # Обновляем баланс и комиссию
                 self.balance -= order.commission
                 self.total_commission += order.commission
                 
                 # Добавляем в историю исполненных ордеров
                 self.order_history.append(order)
+                
+                # Размещаем встречный ордер
+                self.place_counter_order(order, price)
+                
+                # Обновляем свободную маржу
+                self.calculate_free_margin()
                 
                 # Логируем исполнение
                 logger = logging.getLogger("grid_visualizer")
@@ -848,16 +895,27 @@ class OrderManager:
 
     def calculate_free_margin(self):
         """
-        Расчет свободной маржи
+        Расчет свободной маржи с учетом всех открытых позиций и ордеров
         Free Margin = Balance + Floating Profit - Used Margin (positions) - Used Margin (orders)
         """
-        margin_used_positions = sum(pos.volume * pos.entry_price for pos in self.positions)
-
+        # Маржа используемая открытыми позициями
+        margin_used_positions = sum(pos.margin for pos in self.positions if not pos.closed)
+        
+        # Маржа зарезервированная под открытые ордера
         margin_used_orders = sum(
-            order.volume * order.price * (1 + MAKER_COMMISSION_RATE) for order in self.orders if not order.executed
+            order.price * order.volume * (1 + order.commission) 
+            for order in self.orders 
+            if not order.executed
         )
-
+        
+        # Рассчитываем плавающую прибыль если есть текущая цена
+        if self.current_price:
+            self.floating_profit = self.calculate_floating_profit(self.current_price)
+        
+        # Обновляем свободную маржу
         self.free_margin = self.balance + self.floating_profit - margin_used_positions - margin_used_orders
+        
+        return self.free_margin
 
     def get_order_history(self):
         return self.order_history

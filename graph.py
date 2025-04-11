@@ -408,39 +408,53 @@ class MarketGraph(QtWidgets.QWidget):
         return True
 
     def update_order_history(self, order_history, execution_map=None):
-        visible_history = order_history[-self.visible_range:]
-        history_spots = []
-        
-        for order in visible_history:
-            if not order.executed or not hasattr(order, 'execution_price') or order.execution_price is None:
-                continue
-                
-            # Используем карту времени исполнения, если доступна
-            if execution_map and order.execution_time in execution_map:
-                x_coord = execution_map[order.execution_time]
-            elif self.timestamps and order.execution_time is not None and order.execution_time < len(self.timestamps):
-                x_coord = self.timestamps[order.execution_time]
-            else:
-                x_coord = order.execution_time
+        """Обновляет отображение исполненных ордеров на графике"""
+        try:
+            visible_history = order_history[-self.visible_range:]
+            history_spots = []
+            
+            for order in visible_history:
+                if not order.executed or not hasattr(order, 'execution_time') or order.execution_time is None:
+                    continue
+                    
+                # Определяем X координату для сделки
+                x_coord = None
+                if execution_map and order.execution_time in execution_map:
+                    x_coord = execution_map[order.execution_time]
+                elif self.timestamps and isinstance(self.timestamps, list):
+                    # Ищем ближайшую временную метку
+                    try:
+                        x_coord = min(self.timestamps, key=lambda x: abs(x - order.execution_time))
+                    except Exception:
+                        x_coord = order.execution_time
+                else:
+                    x_coord = order.execution_time
 
-            # Детальное логирование
-            self.logger.debug(
-                f"[ORDER-HISTORY] Order ID={order.id} @t={order.execution_time}, "
-                f"x={x_coord}, y={order.execution_price}, type={order.order_type}"
-            )
+                # Определяем цвет в зависимости от типа сделки
+                color = pg.mkBrush(0, 255, 0, 220) if order.order_type.lower() == "buy" else pg.mkBrush(255, 0, 0, 220)
                 
-            spot = {
-                "pos": (x_coord, order.execution_price),
-                "data": 1,
-                "brush": pg.mkBrush(0, 255, 0, 220) if order.order_type == "buy" else pg.mkBrush(255, 0, 0, 220),
-                "symbol": 'o',
-                "size": 15
-            }
-            history_spots.append(spot)
-        
-        self.order_history_curve.setData(history_spots)
-        if history_spots:
-            self.logger.debug(f"[HISTORY] Отрисовано {len(history_spots)} сделок на графике цены")
+                # Создаем точку для отображения сделки
+                spot = {
+                    "pos": (x_coord, order.price),  # Используем price вместо execution_price
+                    "data": order.id,  # Используем ID ордера для идентификации
+                    "brush": color,
+                    "symbol": 'o',
+                    "size": 15
+                }
+                history_spots.append(spot)
+
+            # Обновляем отображение сделок
+            if history_spots:
+                self.order_history_curve.setData(history_spots)
+                self.logger.info(f"[HISTORY] Отрисовано {len(history_spots)} сделок на графике")
+            else:
+                self.order_history_curve.setData([])  # Очищаем график если нет сделок
+                self.logger.debug("[HISTORY] Нет сделок для отображения")
+
+        except Exception as e:
+            self.logger.error(f"[GRAPH] Ошибка при обновлении истории ордеров: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def update_order_history_aligned(self, order_history, start_offset, x_data):
         """
