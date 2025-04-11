@@ -51,12 +51,25 @@ def main():
 
     main_window = MainWindow()
     logger.info("Главное окно создано")
+    
+    # Явно отключаем обработку событий до инициализации
+    main_window.events_enabled = False
+    if hasattr(main_window, "simulator"):
+        if main_window.simulator:
+            # Явно отключаем активность симулятора до старта
+            main_window.simulator.stop_simulation = True
+            main_window.simulator.order_manager.active = False
+            main_window.simulator.order_manager.processing_enabled = False
+            logger.info("Явно отключена активность симулятора до старта")
 
     # Отложенное обновление UI после инициализации
     QtCore.QTimer.singleShot(0, lambda: update_ui_safely(main_window, logger))
 
     # Создаем монитор состояния графика
     graph_monitor = GraphMonitor(main_window, logger)
+    
+    # Устанавливаем обработчик активации для правильного запуска симуляции
+    install_start_simulation_monitor(main_window, logger, start_time)
 
     # Устанавливаем обработчик исключений Qt
     sys._excepthook = sys.excepthook
@@ -483,6 +496,63 @@ def profile_main():
 
     # Для удобства анализа можно использовать: python -m pstats profile_results.prof
     # Или визуализировать с помощью snakeviz: pip install snakeviz, затем snakeviz profile_results.prof
+
+
+def install_start_simulation_monitor(main_window, logger, start_time):
+    """Устанавливает обработчик для корректного запуска симуляции"""
+    try:
+        logger.info("[MONITOR] Установка обработчика запуска симуляции")
+        
+        # Если есть доступ к кнопке старта симуляции
+        if hasattr(main_window, "start_button") and main_window.start_button is not None:
+            # Отключаем существующий сигнал triggered для QAction
+            if main_window.start_button.receivers(main_window.start_button.triggered) > 0:
+                main_window.start_button.triggered.disconnect()
+            
+            # Создаем новый обработчик запуска
+            def monitored_start_simulation():
+                start_time_local = time.time()
+                logger.info("[SIMULATION] Запуск симуляции")
+                
+                # Если есть симулятор, активируем его
+                if hasattr(main_window, "simulator") and main_window.simulator is not None:
+                    # Активируем обработку событий
+                    main_window.events_enabled = True
+                    
+                    # Активируем симулятор и его компоненты
+                    main_window.simulator.order_manager.active = True
+                    main_window.simulator.order_manager.processing_enabled = True
+                    
+                    # Запускаем симуляцию
+                    main_window.simulator.start()
+                    
+                    logger.info(f"[SIMULATION] Симуляция запущена через {time.time() - start_time_local:.3f}с")
+                else:
+                    logger.error("[SIMULATION] Не удалось найти объект симулятора")
+            
+            # Подключаем новый обработчик к сигналу triggered для QAction
+            main_window.start_button.triggered.connect(monitored_start_simulation)
+            logger.info("[MONITOR] Обработчик запуска симуляции установлен")
+        else:
+            logger.warning("[MONITOR] Кнопка запуска не найдена, обработчик не установлен")
+            
+            # Пытаемся найти действия через меню
+            for menu in main_window.menuBar().actions():
+                for action in menu.menu().actions():
+                    if action.text().lower() in ["start simulation", "старт симуляции", "запуск"]:
+                        logger.info(f"[MONITOR] Найдено возможное действие запуска: {action.text()}")
+                        action.triggered.connect(lambda: logger.info("[SIMULATION] Запуск симуляции через найденное действие"))
+            
+            # Также ищем кнопки
+            for child in main_window.findChildren(QtWidgets.QPushButton):
+                if child.text().lower() in ["start", "старт", "запуск"]:
+                    logger.info(f"[MONITOR] Найдена возможная кнопка запуска: {child.text()}")
+                    child.clicked.connect(lambda: logger.info("[SIMULATION] Запуск симуляции через найденную кнопку"))
+    
+    except Exception as e:
+        logger.error(f"[MONITOR] Ошибка при установке обработчика запуска: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 
 if __name__ == "__main__":

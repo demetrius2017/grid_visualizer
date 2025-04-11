@@ -51,8 +51,22 @@ class MainWindow(QtWidgets.QMainWindow):
     def init_toolbar(self):
         toolbar = self.addToolBar("Controls")
 
+        # Создаем и сохраняем ссылку на кнопку запуска симуляции
+        self.start_button = QtWidgets.QAction("Start Simulation", self)
+        self.start_button.triggered.connect(self.simulator.start)
+        self.start_button.setIcon(QtGui.QIcon.fromTheme("media-playback-start"))
+        toolbar.addAction(self.start_button)
+        
+        # Кнопка остановки симуляции
+        self.stop_button = QtWidgets.QAction("Stop Simulation", self)
+        self.stop_button.triggered.connect(self.simulator.stop)
+        self.stop_button.setIcon(QtGui.QIcon.fromTheme("media-playback-stop"))
+        toolbar.addAction(self.stop_button)
+
+        # Кнопка очистки
         clear_action = QtWidgets.QAction("Clear", self)
         clear_action.triggered.connect(self.clear_simulation)
+        clear_action.setIcon(QtGui.QIcon.fromTheme("edit-clear"))
         toolbar.addAction(clear_action)
 
     def clear_simulation(self):

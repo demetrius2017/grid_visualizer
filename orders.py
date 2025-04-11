@@ -114,7 +114,8 @@ class OrderManager:
         self.hedge_active = False
         self.hedge_update_frequency = 24 * 60  # Обновление хеджа раз в сутки
         self.hedge_counter = 0
-        # Добавляем параметры для периодической проверки =
+        
+        # Добавляем параметры для периодической проверки
         self.grid_check_interval = 50  # Проверять каждые 50 тиков
         self.grid_check_counter = 0
         self.last_ema = None
@@ -131,6 +132,18 @@ class OrderManager:
         self.base_fixed_volume = 1.0
         self.low_margin_triggered = False
         self.virtual_grid = {"buy": [], "sell": []}
+        
+        # Флаг разрешения создания ордеров - ВАЖНО: установлен в False!
+        self.orders_enabled = False
+        
+        # Временные метки
+        self.timestamps = []
+        
+        # Явно отключаем любые фоновые операции до запуска
+        self.processing_enabled = False
+        
+        # Новый флаг, чтобы отключить все операции до явного разрешения
+        self.active = False
 
 
     def check_grid_state(self):
@@ -312,6 +325,16 @@ class OrderManager:
     def place_order(self, order_type, price, volume):
         """Размещение ордера с проверкой маржи"""
         
+        # Проверяем, включено ли создание ордеров
+        if not self.orders_enabled:
+            return False
+            
+        # Проверяем количество активных ордеров
+        active_orders_count = len([order for order in self.orders if not order.executed])
+        if active_orders_count >= self.max_orders * 2:  # Максимальное количество ордеров (buy + sell)
+            print(f"ERROR: Maximum orders limit reached ({active_orders_count}/{self.max_orders * 2})")
+            return False
+            
         required_margin = price * volume
         estimated_commission = price * volume * MAKER_COMMISSION_RATE
         total_required = required_margin + estimated_commission
@@ -591,6 +614,7 @@ class OrderManager:
     def check_orders(self, current_price, timestamp):
         """Проверяет и исполняет подходящие ордера с учетом временной метки"""
         executed_any = False
+        self.current_price = current_price  # Обновляем текущую цену
         
         for order in self.orders[:]:  # Копируем список для безопасного удаления элементов
             if not order.executed:
@@ -602,8 +626,6 @@ class OrderManager:
                         self.consecutive_buys += 1
                         self.consecutive_sells = 0
                         executed_any = True
-                        # Обновляем плавающую прибыль после исполнения
-                        self.calculate_floating_profit(current_price)
                         
                 elif order.order_type == "sell" and current_price >= order.price:
                     order_executed = self.execute_order(order, current_price, timestamp)
@@ -611,19 +633,24 @@ class OrderManager:
                         self.consecutive_sells += 1
                         self.consecutive_buys = 0
                         executed_any = True
-                        # Обновляем плавающую прибыль после исполнения
-                        self.calculate_floating_profit(current_price)
 
-        # Очищаем список ордеров от исполненных
-        self.orders = [order for order in self.orders if not order.executed]
-        
-        # Если были исполнены ордера, обновляем сетку
+        # Если были исполнены ордера, проверяем необходимость обновления сетки
         if executed_any:
-            # Обновляем маржу и другие показатели
-            self.calculate_free_margin()
-            self.check_and_refill_orders()
+            self.grid_check_counter += 1  # Увеличиваем счетчик проверок
             
-        return executed_any  # Возвращаем флаг, были ли исполнены ордера
+            # Проверяем состояние сетки
+            if self.check_grid_state():
+                # Если нужно обновить сетку
+                self.update_grid(self.current_ema, current_price, self.price_history)
+            else:
+                # Иначе просто добавляем недостающие ордера
+                self.check_and_refill_orders()
+            
+            # Обновляем маржу и другие показатели
+            self.calculate_floating_profit(current_price)
+            self.calculate_free_margin()
+            
+        return executed_any
 
     def execute_order(self, order, price, timestamp):
         """Исполняет ордер с сохранением временной метки"""
@@ -809,64 +836,127 @@ class OrderManager:
                 )
 
     def initialize_grid(self):
-        if not self.initial_grid_created and self.current_price and self.current_ema:
-            print(f"Initializing grid at price {self.current_price}, EMA: {self.current_ema}")
+        """Инициализация первоначальной торговой сетки"""
+        # Проверяем, разрешено ли создание ордеров и не создана ли уже сетка
+        if not self.orders_enabled:
+            print("Grid initialization skipped: orders not enabled")
+            return
+            
+        if self.initial_grid_created:
+            print("Grid already initialized")
+            return
+            
+        if not self.current_price or not self.current_ema:
+            print("Cannot initialize grid: No price or EMA data")
+            return
+            
+        print(f"Initializing grid at price {self.current_price}, EMA: {self.current_ema}")
 
-            lower_bound = self.current_price * (1 - self.grid_step_percent * self.max_orders / 100)
-            upper_bound = self.current_price * (1 + self.grid_step_percent * self.max_orders / 100)
+        # Рассчитываем границы сетки
+        lower_bound = self.current_price * (1 - self.grid_step_percent * self.max_orders / 100)
+        upper_bound = self.current_price * (1 + self.grid_step_percent * self.max_orders / 100)
 
-            self.current_grid_bounds = (lower_bound, upper_bound)
-            self._build_virtual_grid()  # создаем виртуальные уровни
+        # Сохраняем границы для дальнейшего использования
+        self.current_grid_bounds = (lower_bound, upper_bound)
+        
+        # Создаем виртуальную сетку
+        self._build_virtual_grid()
 
-            buy_prices, sell_prices = self.create_asymmetric_grid(
-                self.current_ema,
-                self.current_price,
-                lower_bound,
-                upper_bound,
-                self.grid_step_percent,
-                self.grid_step_percent,
-            )
+        # Создаем асимметричную сетку
+        buy_prices, sell_prices = self.create_asymmetric_grid(
+            self.current_ema,
+            self.current_price,
+            lower_bound,
+            upper_bound,
+            self.grid_step_percent,
+            self.grid_step_percent,
+        )
 
-            buy_prices = buy_prices[: self.max_orders]
-            sell_prices = buy_prices[: self.max_orders]
+        # Ограничиваем количество уровней
+        buy_prices = buy_prices[:self.max_orders]
+        sell_prices = sell_prices[:self.max_orders]
 
-            if not buy_prices or not sell_prices:
-                print("Error: Failed to generate grid prices!")
-                return
+        if not buy_prices or not sell_prices:
+            print("Error: Failed to generate grid prices!")
+            return
 
-            base_volume = self.calculate_base_volume(self.current_price)
+        # Рассчитываем базовый объем с учетом свободной маржи
+        base_volume = self.calculate_base_volume(self.current_price)
+        
+        # Проверяем, хватает ли маржи для всех ордеров
+        total_required_margin = 0
+        
+        # Рассчитываем необходимую маржу для ордеров на покупку
+        for i, price in enumerate(buy_prices):
+            volume = base_volume * (self.volume_growth_factor**i)
+            required_margin = price * volume * (1 + MAKER_COMMISSION_RATE)
+            total_required_margin += required_margin
+            
+        # Рассчитываем необходимую маржу для ордеров на продажу
+        for i, price in enumerate(sell_prices):
+            volume = base_volume * (self.volume_growth_factor**i)
+            required_margin = price * volume * (1 + MAKER_COMMISSION_RATE)
+            total_required_margin += required_margin
+            
+        # Если требуемая маржа превышает доступную, корректируем объем
+        if total_required_margin > self.free_margin * 0.8:  # Используем не более 80% свободной маржи
+            adjustment_factor = (self.free_margin * 0.8) / total_required_margin
+            base_volume *= adjustment_factor
+            print(f"Adjusted base volume to {base_volume:.8f} due to margin constraints")
 
-            for i, price in enumerate((buy_prices)):
-                volume = base_volume * (self.volume_growth_factor**i)
-                if price < self.current_ema:
-                    self.place_order("buy", price, volume)
+        # Размещаем ордера
+        orders_placed = 0
+        
+        # Размещаем ордера на покупку
+        for i, price in enumerate(buy_prices):
+            if orders_placed >= self.max_orders:
+                break
+                
+            volume = base_volume * (self.volume_growth_factor**i)
+            if price < self.current_ema:
+                if self.place_order("buy", price, volume):
+                    orders_placed += 1
 
-            for i, price in enumerate((sell_prices)):
-                volume = base_volume * (self.volume_growth_factor**i)
-                if price > self.current_ema:
-                    self.place_order("sell", price, volume)
+        # Размещаем ордера на продажу
+        for i, price in enumerate(sell_prices):
+            if orders_placed >= self.max_orders * 2:  # Лимит на общее количество ордеров
+                break
+                
+            volume = base_volume * (self.volume_growth_factor**i)
+            if price > self.current_ema:
+                if self.place_order("sell", price, volume):
+                    orders_placed += 1
 
-            # Хедж на стартовой сетке
-            if len(self.price_history) > 30:
-                price_returns = np.diff(np.log(self.price_history[-30:]))
-                volatility = np.std(price_returns) * np.sqrt(252)
-            else:
-                volatility = 0.5
+        # Хеджирование (опционально)
+        if len(self.price_history) > 30:
+            price_returns = np.diff(np.log(self.price_history[-30:]))
+            volatility = np.std(price_returns) * np.sqrt(252)
+        else:
+            volatility = 0.5
 
-            estimated_volume = self.estimate_grid_volume()
-            hedge_position = self.options_manager.create_hedge_strategy(
-                self.current_price, (lower_bound, upper_bound), volatility, estimated_volume
-            )
+        # Создаем хедж только если маржа позволяет
+        estimated_volume = self.estimate_grid_volume()
+        hedge_position = self.options_manager.create_hedge_strategy(
+            self.current_price, (lower_bound, upper_bound), volatility, estimated_volume
+        )
 
+        # Проверяем, хватает ли маржи для хеджа
+        if hedge_position["total_cost"] < self.free_margin * 0.2:  # Не более 20% от свободной маржи на хедж
             self.free_margin -= hedge_position["total_cost"]
             self.hedge_active = True
+        else:
+            print(f"WARNING: Not enough margin for hedge. Required: {hedge_position['total_cost']:.8f}, Available: {self.free_margin * 0.2:.8f}")
 
-            # ВАЖНО!
-            self.check_and_refill_orders()
-            # self.update_display()
-            # Печатаем сетку после создания
-            self.print_orders()
-            self.initial_grid_created = True
+        # Проверяем и дополняем ордера, если необходимо
+        self.check_and_refill_orders()
+        
+        # Выводим информацию о текущей сетке
+        self.print_orders()
+        
+        # Устанавливаем флаг, что начальная сетка создана
+        self.initial_grid_created = True
+        
+        print(f"Grid initialized with {orders_placed} orders. Free margin: {self.free_margin:.8f}")
 
     def should_update_grid(self, executed_order):
         # Определение, нужно ли обновлять сетку на основе условий исполнения ордера

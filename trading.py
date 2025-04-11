@@ -33,14 +33,17 @@ class TradingSimulator:
         self.file_index = 0
         self.csv_filepath = None
         self.performance_mode = True  # Флаг для отключения лишних обновлений
-        self.max_history_size = 10000  # Максимальный размер истории для ограничения использования памяти
+
+        # Максимальный размер истории для ограничения использования памяти
+        self.max_history_size = 10000  
         self.gui_update_interval = 100  # Обновлять UI каждые 100 тиков
-        self.update_counter = 0  # Явно инициализируем счетчик обновлений
-        self.timestamps = []  # Инициализируем список временных меток
+        self.update_counter = 0  
+        self.timestamps = []  
         self.execution_time_map = {}  # глобальная карта индексов к timestamp
-        self.batch_size = 10  # Добавляем размер пакета обработки данных
+        self.batch_size = 10  # размер пакета обработки данных
+        
         if self.simulation_mode == "file" and self.file_prices:
-            self.current_price = self.file_prices[0]  # Устанавливаем начальную цену из файла
+            self.current_price = self.file_prices[0][1]  # Устанавливаем начальную цену из файла
         else:
             self.current_price = 0.5  # Устанавливаем начальную цену по умолчанию
 
@@ -55,25 +58,33 @@ class TradingSimulator:
             max_orders=max_orders,
         )
 
+        # Создаем таймеры, но НЕ запускаем их здесь
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update)
-        self.timer.start(10)  # 100 тиков в секунду
+        # УДАЛЯЕМ self.timer.start(10)
         
         # Отдельный таймер для плавной отрисовки UI
         self.display_timer = QtCore.QTimer()
         self.display_timer.setInterval(33)  # ~30 FPS
         self.display_timer.timeout.connect(self.update_display)
+        # НЕ запускаем таймер отображения
 
         self.update_counter = 0
         self.update_frequency = 1
         self.price_buffer = []
 
-        self.graph.graphWidget.scene().sigMouseMoved.connect(self.mouse_moved)
+        # Отключаем обработку действий мыши до запуска симуляции
+        # self.graph.graphWidget.scene().sigMouseMoved.connect(self.mouse_moved)
+        self._mouse_handler_connected = False
 
         # Создаем отдельный таймер для обновления окна позиций
         self.positions_timer = QtCore.QTimer()
-        self.positions_timer.setInterval(1000)  # Обновление каждую секунду вместо 500мс
+        self.positions_timer.setInterval(1000)  # Обновление каждую секунду
         self.positions_timer.timeout.connect(self.update_positions_window)
+        # НЕ запускаем таймер окна позиций
+        
+        # Флаг для контроля первого запуска симуляции
+        self.first_run = True
 
     def start(self):
         """Запуск симуляции с корректной инициализацией EMA"""
@@ -115,10 +126,20 @@ class TradingSimulator:
             self.order_manager.current_ema = initial_ema
             self.order_manager.current_price = self.current_price
             self.order_manager.price_history = self.prices.copy()
+            
+            # Активируем возможность создания ордеров только при старте симуляции
+            self.order_manager.orders_enabled = True
+            print("Order creation enabled")
 
             # Инициализируем сетку
             print("Initializing grid...")
             self.order_manager.initialize_grid()
+            
+            # Подключаем обработчик мыши только при запуске симуляции
+            if not self._mouse_handler_connected:
+                self.graph.graphWidget.scene().sigMouseMoved.connect(self.mouse_moved)
+                self._mouse_handler_connected = True
+                print("Mouse handler connected")
 
             # Запускаем таймеры
             self.timer.start(10)  # было 50, стало 10 - теперь 100 тиков в секунду
@@ -213,6 +234,17 @@ class TradingSimulator:
                     
                     # Проверяем исполнение ордеров с передачей timestamp
                     self.order_manager.check_orders(self.current_price, timestamp)
+                    
+                    # Обновляем EMA и проверяем сетку
+                    if len(self.ema) > 0:
+                        self.order_manager.current_ema = self.ema[-1]
+                        # Увеличиваем счётчик проверок сетки
+                        self.order_manager.grid_check_counter += 1
+                        # Проверяем состояние сетки каждые grid_check_interval тиков
+                        if self.order_manager.grid_check_counter >= self.order_manager.grid_check_interval:
+                            if self.order_manager.check_grid_state():
+                                self.order_manager.update_grid(self.ema[-1], self.current_price, self.prices)
+                            self.order_manager.grid_check_counter = 0
 
                     # Собираем данные
                     timestamps_batch.append(timestamp)
@@ -235,6 +267,17 @@ class TradingSimulator:
 
                     # Проверяем исполнение ордеров с передачей timestamp
                     self.order_manager.check_orders(self.current_price, timestamp)
+
+                    # Обновляем EMA и проверяем сетку
+                    if len(self.ema) > 0:
+                        self.order_manager.current_ema = self.ema[-1]
+                        # Увеличиваем счётчик проверок сетки
+                        self.order_manager.grid_check_counter += 1
+                        # Проверяем состояние сетки каждые grid_check_interval тиков
+                        if self.order_manager.grid_check_counter >= self.order_manager.grid_check_interval:
+                            if self.order_manager.check_grid_state():
+                                self.order_manager.update_grid(self.ema[-1], self.current_price, self.prices)
+                            self.order_manager.grid_check_counter = 0
 
                     # Собираем данные
                     timestamps_batch.append(timestamp)
@@ -304,6 +347,11 @@ class TradingSimulator:
         self.timer.stop()
         self.display_timer.stop()
         self.positions_timer.stop()  # Останавливаем таймер для обновления окна позиций
+        
+        # Отключаем возможность создания ордеров при остановке симуляции
+        self.order_manager.orders_enabled = False
+        print("Order creation disabled")
+        
         print("Simulation stopped")
 
     def set_grid_settings(self, settings):
