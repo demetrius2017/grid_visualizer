@@ -35,6 +35,8 @@ class TradingSimulator:
         self.performance_mode = True  # Флаг для отключения лишних обновлений
         self.max_history_size = 10000  # Максимальный размер истории для ограничения использования памяти
         self.gui_update_interval = 100  # Обновлять UI каждые 100 тиков
+        self.update_counter = 0  # Явно инициализируем счетчик обновлений
+        self.timestamps = []  # Инициализируем список временных меток
         if self.simulation_mode == "file" and self.file_prices:
             self.current_price = self.file_prices[0]  # Устанавливаем начальную цену из файла
         else:
@@ -53,6 +55,13 @@ class TradingSimulator:
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update)
+        self.timer.start(10)  # 100 тиков в секунду
+        
+        # Отдельный таймер для плавной отрисовки UI
+        self.display_timer = QtCore.QTimer()
+        self.display_timer.setInterval(33)  # ~30 FPS
+        self.display_timer.timeout.connect(self.update_display)
+
         self.update_counter = 0
         self.update_frequency = 1
         self.price_buffer = []
@@ -61,43 +70,52 @@ class TradingSimulator:
 
         # Создаем отдельный таймер для обновления окна позиций
         self.positions_timer = QtCore.QTimer()
-        self.positions_timer.setInterval(500)  # Обновление каждые 500 мс
+        self.positions_timer.setInterval(1000)  # Обновление каждую секунду вместо 500мс
         self.positions_timer.timeout.connect(self.update_positions_window)
 
     def start(self):
         """Запуск симуляции с предварительной инициализацией EMA"""
-        self.stop_simulation = False
+        try:
+            self.stop_simulation = False
 
-        # Генерация начальных данных для EMA
-        print(f"Generating initial data for EMA calculation (period={self.ema_period})")
-        if self.simulation_mode == "file" and self.file_prices:
-            self.prices = [price for _, price, _ in self.file_prices[:self.ema_period]]
-            self.current_price = self.prices[-1]
-        else:
-            while len(self.prices) < self.ema_period:
-                new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
-                self.prices.append(new_price)
-                self.current_price = new_price
-                print(f"Generated price: {new_price}")
+            # Генерация начальных данных для EMA
+            print(f"Generating initial data for EMA calculation (period={self.ema_period})")
+            if self.simulation_mode == "file" and self.file_prices:
+                self.prices = [price for _, price, _ in self.file_prices[:self.ema_period]]
+                self.current_price = self.prices[-1]
+            else:
+                while len(self.prices) < self.ema_period:
+                    new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
+                    self.prices.append(new_price)
+                    self.current_price = new_price
 
-        # Рассчитываем начальное значение EMA
-        initial_ema = np.mean(self.prices[-self.ema_period :])
-        self.ema.append(initial_ema)
-        print(f"Initial EMA calculated: {initial_ema}")
+            # Рассчитываем начальное значение EMA
+            initial_ema = np.mean(self.prices[-self.ema_period:])
+            self.ema.append(initial_ema)
+            print(f"Initial EMA calculated: {initial_ema}")
 
-        # Обновляем данные в OrderManager
-        self.order_manager.current_ema = initial_ema
-        self.order_manager.current_price = self.current_price
-        self.order_manager.price_history = self.prices.copy()
+            # Обновляем данные в OrderManager
+            self.order_manager.current_ema = initial_ema
+            self.order_manager.current_price = self.current_price
+            self.order_manager.price_history = self.prices.copy()
 
-        # Инициализируем сетку
-        print("Initializing grid...")
-        self.order_manager.initialize_grid()
+            # Инициализируем сетку
+            print("Initializing grid...")
+            self.order_manager.initialize_grid()
 
-        # Запускаем таймер обновления
-        self.timer.start(50)
-        self.positions_timer.start()  # Запускаем таймер для обновления окна позиций
-        print("Simulation started")
+            # Запускаем таймеры
+            self.timer.start(10)  # было 50, стало 10 - теперь 100 тиков в секунду
+            self.display_timer.start()  # ~30 FPS для отрисовки
+            self.positions_timer.start()
+            print("Simulation started")
+
+            # Первый отложенный вызов UI
+            QtCore.QTimer.singleShot(0, self.update_display)
+            
+        except Exception as e:
+            print(f"Ошибка при запуске симуляции: {e}")
+            import traceback
+            print(traceback.format_exc())
 
     def set_csv_file(self, filepath):
         self.csv_filepath = filepath
@@ -105,145 +123,139 @@ class TradingSimulator:
         self.load_price_history_from_csv(filepath)
 
     def load_price_history_from_csv(self, filepath):
+        """Оптимизированная загрузка истории цен с конвертацией временных меток"""
         try:
             import csv
-            from collections import defaultdict
+            import datetime
             
-            # Используем более эффективный CSV-парсер вместо ручного разбора
-            csv_data = defaultdict(list)
-            
+            csv_data = []
             with open(filepath, 'r') as f:
-                csv_reader = csv.reader(f)
-                header = next(csv_reader, None)  # Пропускаем заголовок
+                reader = csv.reader(f)
+                next(reader, None)  # Пропускаем заголовок
                 
-                # Пакетная обработка данных для ускорения
-                for row in csv_reader:
-                    if len(row) >= 3:
-                        timestamp, price_str, source = row[0], row[1], row[2]
+                for row in reader:
+                    if len(row) >= 2:
                         try:
-                            price = float(price_str)
-                            csv_data[timestamp].append((price, source))
-                        except (ValueError, IndexError):
+                            raw_ts = row[0]
+                            # Парсим строку в datetime
+                            dt = datetime.datetime.fromisoformat(raw_ts.replace("Z", ""))
+                            timestamp = dt.timestamp()  # Конвертируем в Unix timestamp (float)
+                            price = float(row[1])
+                            source = row[2] if len(row) > 2 else "unknown"
+                            
+                            csv_data.append((timestamp, price, source))
+                        except Exception as e:
+                            print(f"Ошибка строки: {row}, {e}")
                             continue
             
-            # Конвертируем данные в нужный формат и сортируем
-            self.file_prices = []
-            for timestamp in sorted(csv_data.keys()):
-                for price, source in csv_data[timestamp]:
-                    self.file_prices.append((timestamp, price, source))
-                    
+            # Сортируем по временной метке
+            self.file_prices = sorted(csv_data, key=lambda x: x[0])
             self.file_index = 0
-            print(f"Loaded {len(self.file_prices)} prices from '{filepath}'")
+            
+            # Сохраняем только временные метки (уже как float)
+            self.timestamps = [row[0] for row in self.file_prices]
+            
+            print(f"Загружено {len(csv_data)} точек данных из '{filepath}'")
+            if csv_data:
+                print(f"Диапазон времени: {datetime.datetime.fromtimestamp(self.timestamps[0])} - {datetime.datetime.fromtimestamp(self.timestamps[-1])}")
+            
+            # Если данные загружены, меняем режим
+            if self.file_prices:
+                self.simulation_mode = "file"
+                # Устанавливаем начальную цену
+                _, initial_price, _ = self.file_prices[0]
+                self.current_price = initial_price
+                print(f"Начальная цена установлена: {initial_price}")
+            
+            return True
+            
         except Exception as e:
-            print(f"Error loading CSV file: {e}")
+            print(f"Ошибка при загрузке CSV-файла: {e}")
+            import traceback
+            print(traceback.format_exc())
+            self.simulation_mode = "random"
+            return False
 
     def update(self):
-        """Обновление состояния симуляции с пакетной обработкой для ускорения"""
-        self.update_counter += 1
-        batch_size = 50  # Обрабатываем больше тиков за раз для реального ускорения
+        """Обновление состояния без привязки к отрисовке"""
+        try:
+            if self.stop_simulation:
+                return
 
-        if self.simulation_mode == "file":
-            # Пакетная обработка для ускорения
-            batch_processed = 0
-            timestamps_batch = []
-            prices_batch = []
+            self.update_counter += 1
             
-            while batch_processed < batch_size and self.file_index < len(self.file_prices):
-                timestamp, new_price, source = self.file_prices[self.file_index]
+            # Получаем новую цену на основе режима симуляции
+            if self.simulation_mode == "file":
+                if self.file_index >= len(self.file_prices):
+                    self.stop()
+                    return
+                
+                # Получаем новую цену из файла
+                _, new_price, _ = self.file_prices[self.file_index]
                 self.file_index += 1
-                batch_processed += 1
-                
-                # Собираем данные
-                timestamps_batch.append(timestamp)
-                prices_batch.append(new_price)
-                
-                # Устанавливаем текущую цену равной последней цене в пакете
                 self.current_price = new_price
-            
-            # Если обработали хотя бы 1 тик
-            if batch_processed > 0:
-                # Добавляем все цены в историю
-                self.prices.extend(prices_batch)
-                
-                # Ограничиваем размер истории
-                if len(self.prices) > self.max_history_size:
-                    self.prices = self.prices[-self.max_history_size:]
-                
-                # Обновляем EMA только для последней цены (оптимизация)
+                self.prices.append(new_price)
+            else:
+                # Случайная генерация цены
+                new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
+                self.prices.append(new_price)
+                self.current_price = new_price
+
+            # Обновляем EMA после добавления новой цены
+            if len(self.prices) >= self.ema_period:
                 k = 2 / (self.ema_period + 1)
                 if len(self.ema) == 0:
                     self.ema.append(np.mean(self.prices[-self.ema_period:]))
                 else:
                     new_ema = self.current_price * k + self.ema[-1] * (1 - k)
                     self.ema.append(new_ema)
-                
-                # Ограничиваем размер EMA
-                if len(self.ema) > self.max_history_size:
-                    self.ema = self.ema[-self.max_history_size:]
-                
-                # Обновляем данные в OrderManager
                 self.order_manager.current_ema = self.ema[-1]
-                self.order_manager.current_price = self.current_price
-                self.order_manager.price_history = self.prices
-                
-                # Проверяем ордера ТОЛЬКО после обработки всего пакета
-                self.order_manager.check_orders(self.current_price)
-                
-                # Обновляем UI независимо от счетчика при небольшом количестве тиков
-                # и с интервалом при большем количестве для баланса скорости/отзывчивости
-                if len(self.prices) < 1000 or self.update_counter % 5 == 0:
-                    self.update_display()
-                    
-                # Обновляем баланс
-                if self.update_counter % 10 == 0:
-                    self.update_balances()
-            
-            # Если достигли конца файла
-            if self.file_index >= len(self.file_prices):
-                self.stop()
-                return
-        else:
-            # Аналогичная пакетная обработка для режима random
-            for _ in range(batch_size):
-                new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
-                self.prices.append(new_price)
-                self.current_price = new_price
-                
-            # Ограничиваем размер истории
-            if len(self.prices) > self.max_history_size:
-                self.prices = self.prices[-self.max_history_size:]
-                
-            # Обновляем EMA
-            k = 2 / (self.ema_period + 1)
-            if len(self.ema) == 0:
-                self.ema.append(np.mean(self.prices[-self.ema_period:]))
             else:
-                new_ema = self.current_price * k + self.ema[-1] * (1 - k)
-                self.ema.append(new_ema)
+                self.ema.append(self.current_price)
                 
-            # Ограничиваем размер EMA
-            if len(self.ema) > self.max_history_size:
-                self.ema = self.ema[-self.max_history_size:]
+            # Контролируем частоту проверки ордеров для оптимизации производительности
+            if self.update_counter % 2 == 0:  # Проверяем ордера каждые 2 тика
+                self.order_manager.check_orders(self.current_price, len(self.prices))
                 
-            # Обновляем данные в OrderManager
-            self.order_manager.current_ema = self.ema[-1]
-            self.order_manager.current_price = self.current_price
+            # Обновляем историю в OrderManager
             self.order_manager.price_history = self.prices
             
-            # Проверяем ордера
-            self.order_manager.check_orders(self.current_price)
+            # Очистка старых данных для экономии памяти
+            if len(self.prices) > self.max_history_size * 1.2:
+                self.prices = self.prices[-self.max_history_size:]
+                self.ema = self.ema[-min(len(self.ema), self.max_history_size):]
+                self.balance_history = self.balance_history[-min(len(self.balance_history), self.max_history_size):]
+                self.free_margin_history = self.free_margin_history[-min(len(self.free_margin_history), self.max_history_size):]
+                self.margin_history = self.margin_history[-min(len(self.margin_history), self.max_history_size):]
             
-            # Обновляем UI
-            if len(self.prices) < 1000 or self.update_counter % 5 == 0:
-                self.update_display()
+        except Exception as e:
+            print(f"Ошибка в update: {e}")
+            import traceback
+            print(traceback.format_exc())
+
+    def reset_update_state(self):
+        """Сброс состояния обновления при ошибке"""
+        try:
+            logger = logging.getLogger("grid_visualizer")
+            logger.info("Восстановление состояния обновления после ошибки")
+            
+            # Проверяем и восстанавливаем критические данные
+            if not self.prices:
+                self.prices = [self.current_price]
+            
+            if not self.ema:
+                self.ema = [self.current_price]
                 
-            # Обновляем баланс
-            if self.update_counter % 10 == 0:
-                self.update_balances()
+            # Форсированное обновление UI
+            self.update_display()
+        except Exception as e:
+            logger = logging.getLogger("grid_visualizer")
+            logger.error(f"Ошибка при восстановлении состояния: {str(e)}")
 
     def stop(self):
         self.stop_simulation = True
         self.timer.stop()
+        self.display_timer.stop()
         self.positions_timer.stop()  # Останавливаем таймер для обновления окна позиций
         print("Simulation stopped")
 
@@ -255,53 +267,77 @@ class TradingSimulator:
         print(f"Grid settings updated: grid_size={self.grid_size}, volatility={self.volatility}")
 
     def update_display(self):
-        buy_orders = [order for order in self.order_manager.orders if order.order_type == "buy" and not order.executed]
-        sell_orders = [
-            order for order in self.order_manager.orders if order.order_type == "sell" and not order.executed
-        ]
-        distribution_data = self.order_manager.get_price_distribution_data()
-
-        # Для любого режима используем текущую историю цен
-        price_data = self.prices[-1000:]  # Последние 1000 точек из актуальной истории цен
-        
-        # Гарантируем, что ema_data и price_data имеют одинаковую длину
-        if len(self.ema) >= len(price_data):
-            ema_data = self.ema[-len(price_data):]
-        else:
-            import numpy as np
-            ema_data = [np.nan] * (len(price_data) - len(self.ema)) + self.ema
-
-        logger = logging.getLogger("grid_visualizer")
-        logger.debug(f"[GRAPH DATA] price_data={price_data[-5:]} (len={len(price_data)}), ema_data={ema_data[-5:]}, mode={self.simulation_mode}")
-
-        if len(price_data) == 0:
-            logger.warning("[GRAPH] price_data пуст — график не обновится")
-        
-        if self.simulation_mode == "file" and self.file_index > 0:
-            # Для режима файла добавляем временные метки, но только для обработанных данных
-            # Берем только те метки, которые соответствуют обработанным ценам
-            processed_timestamps = [timestamp for timestamp, _, _ in self.file_prices[:self.file_index]]
-            timestamps = processed_timestamps[-len(price_data):]  # Берем только последние, соответствующие price_data
+        """Обновление отображения с передачей временных меток"""
+        try:
+            # Получаем текущие ордера
+            max_orders = 50  # Ограничиваем для производительности
             
+            # Получаем только активные ордера с сортировкой по близости к текущей цене
+            all_buy_orders = [o for o in self.order_manager.orders if o.order_type == "buy" and not o.executed]
+            all_sell_orders = [o for o in self.order_manager.orders if o.order_type == "sell" and not o.executed]
+            
+            # Сортируем по близости к текущей цене
+            all_buy_orders.sort(key=lambda o: abs(o.price - self.current_price))
+            all_sell_orders.sort(key=lambda o: abs(o.price - self.current_price))
+            
+            buy_orders = all_buy_orders[:max_orders]
+            sell_orders = all_sell_orders[:max_orders]
+            
+            # Получаем историю ордеров для отображения
+            order_history = self.order_manager.get_order_history()
+            
+            # Оптимизация: вместо создания новых списков ордеров, используем существующие
+            distribution_data = self.order_manager.get_price_distribution_data()
+
+            # Получаем последние данные (ограничиваем количество для производительности)
+            max_points = 1000
+            price_data = self.prices[-max_points:]
+            
+            # Проверяем наличие данных
+            if not price_data:
+                logger = logging.getLogger("grid_visualizer")
+                logger.warning("[DISPLAY] price_data пуст — график не обновится")
+                return
+            
+            # Подготавливаем EMA данные
+            if len(self.ema) >= len(price_data):
+                ema_data = self.ema[-len(price_data):]
+            else:
+                # Заполняем начало NaN для соответствия длине price_data
+                import numpy as np
+                ema_data = [np.nan] * (len(price_data) - len(self.ema)) + self.ema
+            
+            # Важно: корректируем timestamps для соответствия текущему срезу данных
+            current_timestamps = None
+            if self.simulation_mode == "file" and self.timestamps:
+                # Берём соответствующий срез временных меток
+                last_index = self.file_index if self.file_index > 0 else len(self.timestamps)
+                start_index = max(0, last_index - len(price_data))
+                current_timestamps = self.timestamps[start_index:last_index]
+            
+            # Обновляем график с данными и метками
             self.graph.set_full_data(
                 price_data,
                 ema_data,
                 buy_orders,
                 sell_orders,
-                self.order_manager.order_history,
+                order_history,  # Передаем актуальную историю ордеров
                 distribution_data,
-                timestamps=timestamps
+                timestamps=current_timestamps
             )
-        else:
-            # Для режима случайных цен: используем стандартный вывод
-            self.graph.set_full_data(
-                price_data,
-                ema_data,
-                buy_orders,
-                sell_orders,
-                self.order_manager.order_history,
-                distribution_data
-            )
+            
+            # Обновляем историю ордеров на графике
+            self.graph.update_order_history(order_history)
+            
+            # Логируем успешное обновление
+            logger = logging.getLogger("grid_visualizer")
+            logger.debug(f"[UPDATE_DISPLAY] Данные обновлены: график обновлен (timestamps: {'yes' if current_timestamps else 'no'})")
+        
+        except Exception as e:
+            logger = logging.getLogger("grid_visualizer")
+            logger.error(f"[DISPLAY] Ошибка при обновлении дисплея: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def update_report(self):
         balance = self.order_manager.get_balance()
@@ -333,6 +369,9 @@ class TradingSimulator:
         if len(self.ema) > 0:
             print(f"Initializing grid with EMA: {self.ema[-1]}, Current Price: {self.current_price}")
             self.order_manager.update_grid(self.ema[-1], self.current_price, self.prices)
+            self.order_manager.current_ema = self.ema[-1]
+            self.order_manager.current_price = self.current_price
+            self.order_manager.price_history = self.prices.copy()
         else:
             print("Cannot initialize grid: EMA not yet calculated")
 
@@ -346,15 +385,23 @@ class TradingSimulator:
         self.graph.update_orders(buy_orders, sell_orders)
 
     def update_positions_window(self):
-        if self.positions_window is None:
-            self.positions_window = PositionsWindow()
-            self.positions_window.show()
+        # Проверяем что окно существует и видимо прежде чем обновлять
+        if self.positions_window is None or not self.positions_window.isVisible():
+            return
 
+        # Ограничиваем частоту обновления в зависимости от объема данных
+        if len(self.prices) > 1000 and self.update_counter % 3 != 0:
+            return  # Пропускаем каждые 2 из 3 обновлений при большом объеме данных
+            
+        # Получаем данные только если окно видимо
         open_positions = self.order_manager.get_open_positions()
-        closed_positions = self.order_manager.get_closed_positions()
+        closed_positions = self.order_manager.get_closed_positions()[-100:]  # Ограничиваем историю
+        
+        # Использование более эффективной передачи данных
         active_options = self.order_manager.options_manager.active_options
-        options_history = self.order_manager.options_manager.options_history
-
+        options_history = self.order_manager.options_manager.options_history[-50:]  # Ограничиваем историю
+        
+        # Обновляем окно
         self.positions_window.update_positions(
             open_positions,
             closed_positions,
@@ -391,3 +438,48 @@ class TradingSimulator:
 
     def update_orders_display(self):
         self.graph.update_orders(self.order_manager.orders)
+
+    def cleanup_order_history(self):
+        """Очистка истории ордеров, оставляя только значимые"""
+        if len(self.order_manager.order_history) > 300:  # Пороговое значение
+            # Сохраняем первые 100 ордеров (для истории)
+            keep_first = 100
+            # Сохраняем последние 200 ордеров (для текущего отображения)
+            keep_last = 200
+            
+            # Создаем новую историю ордеров
+            if len(self.order_manager.order_history) > (keep_first + keep_last):
+                first_chunk = self.order_manager.order_history[:keep_first]
+                last_chunk = self.order_manager.order_history[-keep_last:]
+                self.order_manager.order_history = first_chunk + last_chunk
+                
+                # Логируем для отладки
+                logger = logging.getLogger("grid_visualizer")
+                logger.info(f"[MEMORY] Очищена история ордеров: {len(self.order_manager.order_history)} ордеров сохранено")
+
+    def manage_orders_history(self):
+        """
+        Полностью переделанный метод для управления историей ордеров
+        """
+        # Проверяем количество ордеров в истории
+        if len(self.order_manager.order_history) > 300:
+            # Сортируем ордера по времени исполнения
+            executed_orders = [order for order in self.order_manager.order_history if order.executed]
+            executed_orders.sort(key=lambda order: order.execution_time if hasattr(order, 'execution_time') else 0)
+            
+            # Сохраняем все неисполненные ордера
+            non_executed_orders = [order for order in self.order_manager.order_history if not order.executed]
+            
+            # Оставляем первые 50 и последние 150 исполненных ордеров
+            if len(executed_orders) > 200:
+                keep_first = 50
+                keep_last = 150
+                new_executed_orders = executed_orders[:keep_first] + executed_orders[-keep_last:]
+                
+                # Обновляем историю
+                self.order_manager.order_history = non_executed_orders + new_executed_orders
+                
+                # Логируем для отладки
+                logger = logging.getLogger("grid_visualizer")
+                logger.info(f"[MEMORY] Очищена история ордеров: осталось {len(self.order_manager.order_history)} из {len(executed_orders) + len(non_executed_orders)}")
+

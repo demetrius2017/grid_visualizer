@@ -556,80 +556,36 @@ class OrderManager:
 
         return lower_bound, upper_bound
 
-    def check_orders(self, current_price):
+    def check_orders(self, current_price, execution_index=None):
         """Проверка ордеров с улучшенной логикой хеджирования"""
         self.current_price = current_price
+        last_price = self.price_history[-2] if len(self.price_history) > 1 else current_price
         self.calculate_floating_profit(current_price)
-        self.calculate_free_margin()
-        self.update_price_distribution(current_price)
 
-        active_orders = [order for order in self.orders if not order.executed]
-        active_buy_orders = [order for order in active_orders if order.order_type == "buy"]
-        active_sell_orders = [order for order in active_orders if order.order_type == "sell"]
+        # Проверяем ордера, которые должны быть исполнены
+        executed_any = False
+        for order in self.orders:
+            if not order.executed:
+                # Проверка для близкой цены (точное совпадение)
+                if abs(order.price - current_price) / current_price < 0.001:
+                    is_maker = abs(order.price - current_price) < 0.0001
+                    self.execute_order(order, order.price, is_maker)
+                    if execution_index is not None:
+                        order.execution_time = execution_index
+                    executed_any = True
+                    
+                # Проверка для цены, которая прошла через уровень ордера (пересечение)
+                elif (order.order_type == "buy" and current_price >= order.price and last_price < order.price) or \
+                     (order.order_type == "sell" and current_price <= order.price and last_price > order.price):
+                    is_maker = False  # Если произошло пересечение, то это почти всегда taker
+                    self.execute_order(order, order.price, is_maker)
+                    if execution_index is not None:
+                        order.execution_time = execution_index
+                    executed_any = True
 
-        # Независимая проверка условий хеджа
-        trigger_hedge = False
-        trigger_reason = ""
-
-        last_executed_buy = max(
-            (order.execution_price for order in self.order_history if order.executed and order.order_type == "buy"),
-            default=None,
-        )
-        last_executed_sell = min(
-            (order.execution_price for order in self.order_history if order.executed and order.order_type == "sell"),
-            default=None,
-        )
-
-        # Проверка выхода за пределы последних ордеров
-        if not active_buy_orders and last_executed_buy is not None and current_price < last_executed_buy:
-            trigger_hedge = True
-            trigger_reason = f"Price {current_price:.8f} below last executed buy order {last_executed_buy:.8f}"
-
-        if not active_sell_orders and last_executed_sell is not None and current_price > last_executed_sell:
-            trigger_hedge = True
-            trigger_reason = f"Price {current_price:.8f} above last executed sell order {last_executed_sell:.8f}"
-
-        # Дополнительная проверка границ сетки
-        if self.current_grid_bounds:
-            lower_bound, upper_bound = self.current_grid_bounds
-            if current_price < lower_bound or self.low_margin_triggered:
-                trigger_hedge = True
-                trigger_reason = f"Price {current_price:.8f} below grid bound {lower_bound:.8f}"
-            elif current_price > upper_bound or self.low_margin_triggered:
-                trigger_hedge = True
-                trigger_reason = f"Price {current_price:.8f} above grid bound {upper_bound:.8f}"
-
-        # Обработка срабатывания хеджа
-        if trigger_hedge:
-            self.trigger_hedge(current_price)
-            # print(f"\nTriggering hedge: {trigger_reason}")
-            # estimated_volume = self.estimate_grid_volume()
-            # hedge_payout, _ = self.options_manager.calculate_hedge_payout(current_price, estimated_volume)
-            # print(f"Hedge payout with estimated volume {estimated_volume:.8f}: {hedge_payout:.8f}")
-
-            # self.balance += hedge_payout
-
-            # margin_returned = sum(
-            #     order.volume * order.price * (1 + (MAKER_COMMISSION_RATE if order.is_maker else TAKER_COMMISSION_RATE))
-            #     for order in self.orders
-            #     if not order.executed
-            # )
-            # self.free_margin += margin_returned
-
-            # self.orders = [order for order in self.orders if order.executed]
-
-            # self.hedge_active = False
-
-            # print("Initializing new grid...")
-            # self.initialize_new_grid(current_price)
-
-            # # ВАЖНО!
-            # self.last_grid_time = len(self.price_history)  # Если используешь защиту от частых перестроек
-
-            return  # Останавливаем дальнейшее выполнение метода
-
-        # Проверка исполнения ордеров
-        self._check_order_execution(current_price)
+        # Вызываем стандартную логику только если не исполнили ни одного ордера выше
+        if not executed_any:
+            self._check_order_execution(current_price)
 
     def _check_order_execution(self, current_price):
         """Проверка исполнения ордеров с учетом типа комиссии"""
@@ -822,7 +778,7 @@ class OrderManager:
             )
 
             buy_prices = buy_prices[: self.max_orders]
-            sell_prices = sell_prices[: self.max_orders]
+            sell_prices = buy_prices[: self.max_orders]
 
             if not buy_prices or not sell_prices:
                 print("Error: Failed to generate grid prices!")
