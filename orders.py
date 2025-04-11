@@ -557,13 +557,36 @@ class OrderManager:
         return lower_bound, upper_bound
 
     def check_orders(self, current_price, timestamp):
-        """Проверяет и исполняет подходящие ордера"""
-        for order in self.orders:
+        """Проверяет и исполняет подходящие ордера с учетом временной метки"""
+        for order in self.orders[:]:  # Копируем список для безопасного удаления элементов
             if not order.executed:
                 if order.order_type == "buy" and current_price <= order.price:
-                    self.execute_order(order, order.price, timestamp)
+                    # Исполняем ордер с сохранением временной метки
+                    order.execution_price = current_price
+                    order.execution_time = timestamp
+                    order.executed = True
+                    # Добавляем в историю
+                    self.order_history.append(order)
+                    # Логируем исполнение
+                    self.logger.info(
+                        f"[ORDER] Executed BUY order at {current_price:.8f}, "
+                        f"time={timestamp}, commission={order.commission:.8f}"
+                    )
                 elif order.order_type == "sell" and current_price >= order.price:
-                    self.execute_order(order, order.price, timestamp)
+                    # Исполняем ордер с сохранением временной метки
+                    order.execution_price = current_price
+                    order.execution_time = timestamp
+                    order.executed = True
+                    # Добавляем в историю
+                    self.order_history.append(order)
+                    # Логируем исполнение
+                    self.logger.info(
+                        f"[ORDER] Executed SELL order at {current_price:.8f}, "
+                        f"time={timestamp}, commission={order.commission:.8f}"
+                    )
+                    
+        # Очищаем список ордеров от исполненных
+        self.orders = [order for order in self.orders if not order.executed]
 
     def execute_order(self, order, price, timestamp):
         """Исполняет ордер с сохранением временной метки"""

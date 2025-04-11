@@ -323,21 +323,13 @@ class MarketGraph(QtWidgets.QWidget):
             self.logger.error(f"[GRAPH] Ошибка в auto_scale_view: {str(e)}")
 
     def update_visible_range(self, value=None):
-        """
-        Оптимизированная версия метода обновления видимого диапазона
-        с поддержкой временных меток и правильным позиционированием ордеров
-        """
+        """Обновление видимого диапазона с корректной обработкой временных меток"""
         try:
             if not hasattr(self, 'full_price_data') or not self.full_price_data:
                 return
 
-            # Фиксируем размер видимого диапазона
-            if len(self.full_price_data) > 1000:
-                self.visible_range = min(self.visible_range, 500)
-            
             if value is not None:
                 self.data_offset = value
-                # Если пользователь вручную двигает ползунок и он не в конце
                 if value < self.scroll_bar.maximum():
                     self.auto_scroll = False
                     self.scroll_lock_button.setChecked(False)
@@ -345,6 +337,7 @@ class MarketGraph(QtWidgets.QWidget):
             else:
                 self.data_offset = max(0, len(self.full_price_data) - self.visible_range)
             
+            # Правильный порядок данных - от старых к новым
             start = max(0, self.data_offset)
             end = min(start + self.visible_range, len(self.full_price_data))
             
@@ -352,42 +345,33 @@ class MarketGraph(QtWidgets.QWidget):
             if not visible_data:
                 return
                 
-            # Используем временные метки, if они доступны
+            # Используем временные метки в правильном порядке
             if self.timestamps and len(self.timestamps) >= end:
                 x_data = self.timestamps[start:end]
             else:
-                x_data = list(range(len(visible_data)))
+                x_data = list(range(start, end))
             
             # Отрисовываем ценовой график
             self.price_curve.setData(x_data, visible_data)
             
-            # Обновляем EMA
+            # Обновляем EMA с теми же временными метками
             if hasattr(self, 'full_ema_data') and self.full_ema_data:
-                visible_ema = self.full_ema_data[start:end] if len(self.full_ema_data) >= end else []
-                if visible_ema or len(visible_ema) == len(x_data):
+                visible_ema = self.full_ema_data[start:end]
+                if len(visible_ema) == len(x_data):
                     self.ema_curve.setData(x_data, visible_ema)
                     self.ema_curve.show() if self.ema_visible else self.ema_curve.hide()
 
-            # Обновляем ордера с правильным позиционированием по времени
-            if visible_data:
-                current_time = x_data[-1] if x_data else len(visible_data) - 1
-                self.update_order_book(
-                    self.full_buy_orders,
-                    self.full_sell_orders,
-                    current_time,
-                    visible_data[-1]
-                )
+            # Обновляем историю сделок
+            if hasattr(self, 'full_order_history') and self.full_order_history:
+                self.update_order_history_aligned(self.full_order_history, x_data[0], x_data)
 
-            # Обновляем историю ордеров с учётом временных меток
-            self.update_order_history_aligned(self.full_order_history, start, x_data)
-            
-            # Автоматически масштабируем по оси Y при скролле
+            # Автоматическое масштабирование
             self.auto_scale_view()
-            
-            # Автопрокрутка только если включена
+
+            # Автопрокрутка если включена
             if self.auto_scroll:
                 self.scroll_bar.setValue(self.scroll_bar.maximum())
-            
+                
         except Exception as e:
             self.logger.error(f"[GRAPH] Ошибка при обновлении видимого диапазона: {str(e)}")
             import traceback

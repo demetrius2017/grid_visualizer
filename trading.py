@@ -38,6 +38,7 @@ class TradingSimulator:
         self.update_counter = 0  # Явно инициализируем счетчик обновлений
         self.timestamps = []  # Инициализируем список временных меток
         self.execution_time_map = {}  # глобальная карта индексов к timestamp
+        self.batch_size = 10  # Добавляем размер пакета обработки данных
         if self.simulation_mode == "file" and self.file_prices:
             self.current_price = self.file_prices[0]  # Устанавливаем начальную цену из файла
         else:
@@ -180,46 +181,58 @@ class TradingSimulator:
     def update(self):
         """Обновление состояния без привязки к отрисовке"""
         try:
-            if self.stop_simulation:
-                return
+            batch_size = self.batch_size
+            batch_processed = 0
+            timestamps_batch = []
+            prices_batch = []
 
-            self.update_counter += 1
-            
-            # Получаем новую цену на основе режима симуляции
             if self.simulation_mode == "file":
-                if self.file_index >= len(self.file_prices):
-                    self.stop()
-                    return
-                
-                # Получаем новую цену из файла и timestamp
-                timestamp, new_price, _ = self.file_prices[self.file_index]
-                self.execution_time_map[len(self.prices)] = timestamp
-                self.file_index += 1
-                
-                # Устанавливаем текущую цену и timestamp в order_manager
-                self.current_price = new_price
-                self.order_manager.current_price = new_price
-                self.order_manager.execution_time = timestamp
-                
-                self.prices.append(new_price)
-                
-                # Проверяем ордера с учетом timestamp
-                if self.update_counter % 2 == 0:  # Проверяем ордера каждые 2 тика
-                    self.order_manager.check_orders(self.current_price, timestamp)
-            else:
-                # Случайная генерация цены
-                new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
-                self.prices.append(new_price)
-                self.current_price = new_price
-                
-                # Для random mode используем len(prices) как timestamp
-                current_time = len(self.prices)
-                self.order_manager.check_orders(self.current_price, current_time)
+                while batch_processed < batch_size and self.file_index < len(self.file_prices):
+                    timestamp, new_price, source = self.file_prices[self.file_index]
+                    self.file_index += 1
+                    batch_processed += 1
 
-            # Обновляем EMA после добавления новой цены
+                    # Обновляем цену и время
+                    self.current_price = new_price
+                    self.current_timestamp = timestamp
+                    
+                    # Проверяем исполнение ордеров с передачей timestamp
+                    self.order_manager.check_orders(self.current_price, timestamp)
+
+                    # Собираем данные
+                    timestamps_batch.append(timestamp)
+                    prices_batch.append(new_price)
+                    
+                    # Обновляем историю
+                    self.timestamps.append(timestamp)
+                    self.prices.append(new_price)
+
+            elif self.simulation_mode == "random":
+                while batch_processed < batch_size:
+                    # Генерируем следующую цену
+                    new_price = self.generate_next_price()
+                    timestamp = len(self.prices)  # В random режиме используем индекс как timestamp
+                    batch_processed += 1
+                    
+                    # Обновляем цену и время
+                    self.current_price = new_price
+                    self.current_timestamp = timestamp
+
+                    # Проверяем исполнение ордеров с передачей timestamp
+                    self.order_manager.check_orders(self.current_price, timestamp)
+
+                    # Собираем данные
+                    timestamps_batch.append(timestamp)
+                    prices_batch.append(new_price)
+                    
+                    # Обновляем историю
+                    self.timestamps.append(timestamp)
+                    self.prices.append(new_price)
+
+            # Обновляем EMA
             if len(self.prices) >= self.ema_period:
                 k = 2 / (self.ema_period + 1)
-                if len(self.ema) == 0:
+                if not self.ema:
                     self.ema.append(np.mean(self.prices[-self.ema_period:]))
                 else:
                     new_ema = self.current_price * k + self.ema[-1] * (1 - k)
@@ -227,18 +240,20 @@ class TradingSimulator:
                 self.order_manager.current_ema = self.ema[-1]
             else:
                 self.ema.append(self.current_price)
-                
+
             # Обновляем историю в OrderManager
             self.order_manager.price_history = self.prices
-            
+            self.order_manager.timestamps = self.timestamps
+
             # Очистка старых данных для экономии памяти
             if len(self.prices) > self.max_history_size * 1.2:
                 self.prices = self.prices[-self.max_history_size:]
                 self.ema = self.ema[-min(len(self.ema), self.max_history_size):]
+                self.timestamps = self.timestamps[-self.max_history_size:]
                 self.balance_history = self.balance_history[-min(len(self.balance_history), self.max_history_size):]
                 self.free_margin_history = self.free_margin_history[-min(len(self.free_margin_history), self.max_history_size):]
                 self.margin_history = self.margin_history[-min(len(self.margin_history), self.max_history_size):]
-            
+
         except Exception as e:
             print(f"Ошибка в update: {e}")
             import traceback
@@ -496,4 +511,31 @@ class TradingSimulator:
             logger = logging.getLogger("grid_visualizer")
             logger.error(f"[ORDER] Error executing order: {str(e)}")
         return False
+
+    def generate_next_price(self):
+        """Генерирует следующую цену на основе текущей цены и волатильности"""
+        try:
+            if not self.current_price:
+                self.current_price = 0.5  # начальная цена по умолчанию
+
+            # Генерируем случайное изменение цены с учетом волатильности
+            price_change = np.random.normal(0, self.volatility)
+
+            # Применяем изменение к текущей цене
+            new_price = max(0.001, self.current_price * (1 + price_change))
+
+            # Ограничиваем максимальное изменение цены для реалистичности
+            max_change = 0.1  # максимальное изменение 10%
+            if abs(new_price - self.current_price) / self.current_price > max_change:
+                if new_price > self.current_price:
+                    new_price = self.current_price * (1 + max_change)
+                else:
+                    new_price = self.current_price * (1 - max_change)
+            
+            return new_price
+
+        except Exception as e:
+            logger = logging.getLogger("grid_visualizer")
+            logger.error(f"[PRICE] Ошибка генерации цены: {str(e)}")
+            return self.current_price  # в случае ошибки возвращаем текущую цену
 
