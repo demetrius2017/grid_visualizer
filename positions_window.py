@@ -100,6 +100,28 @@ class PositionsWindow(QtWidgets.QWidget):
         open_orders_count=None,
         total_trades_count=None
     ):
+        # Улучшенное логирование для математической отладки позиций
+        import logging
+        logger = logging.getLogger("grid_visualizer")
+        
+        # Логируем количество и типы позиций для математической проверки
+        buy_positions = [p for p in open_positions if p.order_type == "buy"]
+        sell_positions = [p for p in open_positions if p.order_type == "sell"]
+        
+        logger.info(f"[GRID_MATH] Open positions: {len(open_positions)} (Buy: {len(buy_positions)}, Sell: {len(sell_positions)})")
+        
+        # Проверка на одновременно открытые противоположные позиции - математический дисбаланс
+        if buy_positions and sell_positions:
+            buy_volume = sum(p.volume for p in buy_positions)
+            sell_volume = sum(p.volume for p in sell_positions)
+            logger.warning(f"[GRID_MATH] Simultaneous open positions detected! Buy vol: {buy_volume:.8f}, Sell vol: {sell_volume:.8f}, Diff: {buy_volume-sell_volume:.8f}")
+            
+            # Вывод подробной информации о пересекающихся позициях для отладки
+            for bp in buy_positions:
+                logger.debug(f"[GRID_MATH] BUY: entry={bp.entry_price:.8f}, vol={bp.volume:.8f}, floating={bp.floating_profit:.8f}")
+            for sp in sell_positions:
+                logger.debug(f"[GRID_MATH] SELL: entry={sp.entry_price:.8f}, vol={sp.volume:.8f}, floating={sp.floating_profit:.8f}")
+        
         # Обновление открытых позиций
         self.open_positions_table.setRowCount(len(open_positions))
         
@@ -204,6 +226,9 @@ class PositionsWindow(QtWidgets.QWidget):
             summary_text.append(f"Открытых ордеров: {open_orders_count}")
         else:
             summary_text.append(f"Открытых ордеров: {len(open_positions)}")
+            
+        # Добавляем явное отображение количества открытых позиций
+        summary_text.append(f"Открытых позиций: {len(open_positions)}")
             
         if total_trades_count is not None:
             summary_text.append(f"Общее количество сделок: {total_trades_count}")

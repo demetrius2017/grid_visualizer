@@ -19,8 +19,8 @@ last_graph_update = 0
 
 def setup_logging():
     # Очищаем лог-файлы перед началом работы
-    open('app_debug.log', 'w').close()
-    open('detailed_debug.log', 'w').close()
+    open("app_debug.log", "w").close()
+    open("detailed_debug.log", "w").close()
 
     logging.basicConfig(
         level=logging.DEBUG,
@@ -51,7 +51,7 @@ def main():
 
     main_window = MainWindow()
     logger.info("Главное окно создано")
-    
+
     # Явно отключаем обработку событий до инициализации
     main_window.events_enabled = False
     if hasattr(main_window, "simulator"):
@@ -67,7 +67,7 @@ def main():
 
     # Создаем монитор состояния графика
     graph_monitor = GraphMonitor(main_window, logger)
-    
+
     # Устанавливаем обработчик активации для правильного запуска симуляции
     install_start_simulation_monitor(main_window, logger, start_time)
 
@@ -325,6 +325,7 @@ class EventLogger(QtCore.QObject):
 
 class GraphMonitor(QtCore.QObject):
     """Класс для мониторинга состояния графика и аварийного восстановления"""
+
     def __init__(self, main_window, logger):
         super().__init__()
         self.main_window = main_window
@@ -333,43 +334,43 @@ class GraphMonitor(QtCore.QObject):
         self.stale_threshold = 5.0  # секунд без обновления
         self.recovery_attempts = 0
         self.max_recovery_attempts = 3
-        
+
         # Запускаем таймер для проверки состояния
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.check_graph_state)
         self.timer.start(1000)  # проверка каждую секунду
-    
+
     def check_graph_state(self):
         """Проверка состояния графика и восстановление при необходимости"""
         try:
             current_time = time.time()
             elapsed = current_time - self.last_update_time
-            
+
             if elapsed > self.stale_threshold:
                 self.logger.warning(f"[MONITOR] График не обновлялся {elapsed:.1f} секунд")
-                
+
                 if self.recovery_attempts < self.max_recovery_attempts:
                     self.recovery_attempts += 1
                     self.logger.info(f"[MONITOR] Попытка восстановления #{self.recovery_attempts}")
-                    
+
                     # Проверяем состояние графика и предпринимаем меры
                     if hasattr(self.main_window, "market_graph") and self.main_window.market_graph is not None:
                         graph = self.main_window.market_graph
-                        
+
                         # Форсированное обновление UI через прямой вызов
                         graph.update()
                         graph.repaint()
-                        
+
                         # Проверяем наличие данных
-                        if hasattr(graph, 'full_price_data') and graph.full_price_data:
+                        if hasattr(graph, "full_price_data") and graph.full_price_data:
                             # Сбрасываем кеш графика для перерисовки
                             graph.graphWidget.plotItem.getViewBox().autoRange()
-                            
+
                             # Восстанавливаем соединения сигналов
-                            if hasattr(graph, 'update_visible_range'):
+                            if hasattr(graph, "update_visible_range"):
                                 graph.scroll_bar.valueChanged.disconnect()
                                 graph.scroll_bar.valueChanged.connect(graph.update_visible_range)
-                        
+
                         # Принудительно обновляем торговый симулятор, если он доступен
                         if hasattr(self.main_window, "trading_simulator"):
                             simulator = self.main_window.trading_simulator
@@ -379,26 +380,26 @@ class GraphMonitor(QtCore.QObject):
                                 simulator.timer.start(50)
                                 # Принудительное обновление дисплея
                                 QtCore.QTimer.singleShot(0, simulator.update_display)
-                    
+
                     self.last_update_time = current_time
                     self.logger.info("[MONITOR] Восстановление выполнено успешно")
-                    
+
                 elif self.recovery_attempts == self.max_recovery_attempts:
                     # Крайние меры - перезапуск всей системы
                     self.logger.error("[MONITOR] Крайние меры - полное восстановление системы")
-                    
+
                     # Полная перезагрузка симулятора
                     if hasattr(self.main_window, "trading_simulator"):
                         simulator = self.main_window.trading_simulator
                         if simulator is not None:
                             simulator.stop()
-                            
+
                             # Пауза перед перезапуском для обработки событий
                             QtCore.QTimer.singleShot(500, simulator.start)
-                    
+
                     self.recovery_attempts += 1
                     self.last_update_time = current_time
-                    
+
                 else:
                     self.logger.critical("[MONITOR] Превышено количество попыток восстановления")
             else:
@@ -426,9 +427,9 @@ def monitor_app_state(main_window, logger, start_time):
         elapsed = time.time() - start_time
         memory_usage = get_memory_usage()
         cpu_usage = get_cpu_usage()
-        
+
         logger.info(f"[STATUS] Время работы: {elapsed:.1f}с, RAM: {memory_usage:.1f}MB, CPU: {cpu_usage:.1f}%")
-        
+
         # Проверяем состояние основных компонентов
         if hasattr(main_window, "trading_simulator"):
             simulator = main_window.trading_simulator
@@ -444,6 +445,7 @@ def get_memory_usage():
     """Получение использования памяти процессом"""
     try:
         import psutil
+
         process = psutil.Process()
         return process.memory_info().rss / 1024 / 1024  # MB
     except ImportError:
@@ -457,6 +459,7 @@ def get_cpu_usage():
     """Получение использования CPU процессом"""
     try:
         import psutil
+
         process = psutil.Process()
         return process.cpu_percent()
     except ImportError:
@@ -502,56 +505,59 @@ def install_start_simulation_monitor(main_window, logger, start_time):
     """Устанавливает обработчик для корректного запуска симуляции"""
     try:
         logger.info("[MONITOR] Установка обработчика запуска симуляции")
-        
+
         # Если есть доступ к кнопке старта симуляции
         if hasattr(main_window, "start_button") and main_window.start_button is not None:
             # Отключаем существующий сигнал triggered для QAction
             if main_window.start_button.receivers(main_window.start_button.triggered) > 0:
                 main_window.start_button.triggered.disconnect()
-            
+
             # Создаем новый обработчик запуска
             def monitored_start_simulation():
                 start_time_local = time.time()
                 logger.info("[SIMULATION] Запуск симуляции")
-                
+
                 # Если есть симулятор, активируем его
                 if hasattr(main_window, "simulator") and main_window.simulator is not None:
                     # Активируем обработку событий
                     main_window.events_enabled = True
-                    
+
                     # Активируем симулятор и его компоненты
                     main_window.simulator.order_manager.active = True
                     main_window.simulator.order_manager.processing_enabled = True
-                    
+
                     # Запускаем симуляцию
                     main_window.simulator.start()
-                    
+
                     logger.info(f"[SIMULATION] Симуляция запущена через {time.time() - start_time_local:.3f}с")
                 else:
                     logger.error("[SIMULATION] Не удалось найти объект симулятора")
-            
+
             # Подключаем новый обработчик к сигналу triggered для QAction
             main_window.start_button.triggered.connect(monitored_start_simulation)
             logger.info("[MONITOR] Обработчик запуска симуляции установлен")
         else:
             logger.warning("[MONITOR] Кнопка запуска не найдена, обработчик не установлен")
-            
+
             # Пытаемся найти действия через меню
             for menu in main_window.menuBar().actions():
                 for action in menu.menu().actions():
                     if action.text().lower() in ["start simulation", "старт симуляции", "запуск"]:
                         logger.info(f"[MONITOR] Найдено возможное действие запуска: {action.text()}")
-                        action.triggered.connect(lambda: logger.info("[SIMULATION] Запуск симуляции через найденное действие"))
-            
+                        action.triggered.connect(
+                            lambda: logger.info("[SIMULATION] Запуск симуляции через найденное действие")
+                        )
+
             # Также ищем кнопки
             for child in main_window.findChildren(QtWidgets.QPushButton):
                 if child.text().lower() in ["start", "старт", "запуск"]:
                     logger.info(f"[MONITOR] Найдена возможная кнопка запуска: {child.text()}")
                     child.clicked.connect(lambda: logger.info("[SIMULATION] Запуск симуляции через найденную кнопку"))
-    
+
     except Exception as e:
         logger.error(f"[MONITOR] Ошибка при установке обработчика запуска: {str(e)}")
         import traceback
+
         logger.error(traceback.format_exc())
 
 
