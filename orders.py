@@ -490,22 +490,37 @@ class OrderManager:
 
 
     def calculate_base_volume(self, current_price):
-        """Расчет базового объема с минимальным фиксированным значением"""
-        # Используем фиксированный минимальный объем для надежности
-        min_base_volume = 10.0
-
-        # Рассчитываем объем на основе свободной маржи
-        margin_based_volume = self.free_margin * 0.5 / (self.max_orders * 2 * current_price)
-
-        if margin_based_volume < MIN_VOLUME_THRESHOLD:
+        """Расчет базового объема с учетом оптимального распределения маржи для долгосрочной торговли"""
+        # Общий объем для 160 потенциальных ордеров
+        total_potential_orders = 160
+        
+        # Рассчитываем базовый объем для одного ордера, используя только 30% свободной маржи
+        # чтобы оставить запас для будущих ордеров и контр-ордеров
+        margin_for_grid = self.free_margin * 0.30
+        
+        # Средняя цена для расчета (можно использовать EMA или текущую цену)
+        avg_price = self.current_ema if self.current_ema else current_price
+        
+        # Вычисляем базовый объем
+        base_volume = margin_for_grid / (total_potential_orders * avg_price)
+        
+        # Устанавливаем минимальный объем для надежности
+        min_base_volume = 0.1
+        
+        # Логируем расчет объема
+        logger = logging.getLogger("grid_visualizer")
+        logger.debug(f"[VOLUME] Расчет объема: маржа={self.free_margin:.4f}, для сетки={margin_for_grid:.4f}, " +
+                    f"цена={avg_price:.4f}, объем={base_volume:.4f}")
+        
+        # Если маржа слишком низкая, отмечаем это, но продолжаем с минимальным объемом
+        if base_volume < MIN_VOLUME_THRESHOLD:
             self.low_margin_triggered = True
+            logger.warning(f"[VOLUME] Низкая маржа, используем минимальный объем: {min_base_volume}")
         else:
             self.low_margin_triggered = False
-        # Берем максимум из рассчитанного and минимального объема
-        base_volume = max(margin_based_volume, min_base_volume)
-
-        # print(f"Calculated base volume: {base_volume:.8f}")
-        return base_volume
+            
+        # Берем максимум из рассчитанного и минимального объема
+        return max(base_volume, min_base_volume)
 
     def calculate_order_volume(self, current_price):
         # Рассчитываем общий объем для всей сетки
@@ -1358,27 +1373,539 @@ class OrderManager:
             self.place_order("sell", price, volume)
 
     def calculate_grid_level(self, order_type, price):
-        """
-        Рассчитывает уровень сетки для заданной цены относительно EMA.
-        Уровень показывает, сколько шагов от EMA находится цена.
+        """Рассчитывает уровень сетки для ордера относительно EMA"""
+        if not self.current_ema:
+            return 1  # По умолчанию, если EMA не определена
+            
+        # Вычисляем расстояние от цены до EMA в процентах
+        distance = abs(price - self.current_ema) / self.current_ema
         
-        :param order_type: "buy" или "sell"
-        :param price: цена для определения уровня
-        :return: целое число, уровень сетки (1, 2, 3, ...)
+        # Переводим расстояние в уровни сетки (целое число)
+        grid_level = round(distance / (self.grid_step_percent / 100))
+        
+        # Минимальный уровень - 1
+        grid_level = max(1, grid_level)
+        
+        logger = logging.getLogger("grid_visualizer")
+        logger.debug(f"[GRID_LEVEL] {order_type} price={price:.4f}, ema={self.current_ema:.4f}, level={grid_level}")
+        
+        return grid_level
+
+    def close_distant_orders(self, current_ema, max_distance=10):
+        """
+        Закрывает ордера и позиции, которые находятся слишком далеко от текущего значения EMA
+        
+        Args:
+            current_ema: текущее значение EMA
+            max_distance: максимальное количество уровней от EMA, после которого ордера закрываются
+        """
+        logger = logging.getLogger("grid_visualizer")
+        
+        # Получаем все активные ордера и позиции
+        buy_orders = list(self.buy_orders.values())
+        sell_orders = list(self.sell_orders.values())
+        buy_positions = list(self.buy_positions.values())
+        sell_positions = list(self.sell_positions.values())
+        
+        closed_orders_count = 0
+        closed_positions_count = 0
+        
+        # Закрываем buy ордера, которые слишком далеко ниже EMA
+        for order in buy_orders:
+            # Рассчитываем расстояние от ордера до EMA в процентах
+            price_diff_percent = (current_ema - order.price) / current_ema * 100
+            levels_away = abs(price_diff_percent) / self.grid_step
+            
+            if levels_away > max_distance:
+                logger.info(f"[GRID_CLEANUP] Закрытие удаленного buy ордера: цена={order.price:.8f}, " +
+                           f"EMA={current_ema:.8f}, уровней={levels_away:.2f} > {max_distance}")
+                
+                # Закрываем ордер
+                self.cancel_order(order.order_id)
+                closed_orders_count += 1
+        
+        # Закрываем sell ордера, которые слишком далеко выше EMA
+        for order in sell_orders:
+            # Рассчитываем расстояние от ордера до EMA в процентах
+            price_diff_percent = (order.price - current_ema) / current_ema * 100
+            levels_away = abs(price_diff_percent) / self.grid_step
+            
+            if levels_away > max_distance:
+                logger.info(f"[GRID_CLEANUP] Закрытие удаленного sell ордера: цена={order.price:.8f}, " +
+                           f"EMA={current_ema:.8f}, уровней={levels_away:.2f} > {max_distance}")
+                
+                # Закрываем ордер
+                self.cancel_order(order.order_id)
+                closed_orders_count += 1
+        
+        # Закрываем buy позиции, которые слишком далеко ниже EMA
+        for position in buy_positions:
+            # Рассчитываем расстояние от позиции до EMA в процентах
+            price_diff_percent = (current_ema - position.entry_price) / current_ema * 100
+            levels_away = abs(price_diff_percent) / self.grid_step
+            
+            if levels_away > max_distance:
+                logger.info(f"[GRID_CLEANUP] Закрытие удаленной buy позиции: вход={position.entry_price:.8f}, " +
+                           f"EMA={current_ema:.8f}, уровней={levels_away:.2f} > {max_distance}")
+                
+                # Закрываем позицию по рыночной цене
+                self.close_position_market(position.position_id)
+                closed_positions_count += 1
+        
+        # Закрываем sell позиции, которые слишком далеко выше EMA
+        for position in sell_positions:
+            # Рассчитываем расстояние от позиции до EMA в процентах
+            price_diff_percent = (position.entry_price - current_ema) / current_ema * 100
+            levels_away = abs(price_diff_percent) / self.grid_step
+            
+            if levels_away > max_distance:
+                logger.info(f"[GRID_CLEANUP] Закрытие удаленной sell позиции: вход={position.entry_price:.8f}, " +
+                           f"EMA={current_ema:.8f}, уровней={levels_away:.2f} > {max_distance}")
+                
+                # Закрываем позицию по рыночной цене
+                self.close_position_market(position.position_id)
+                closed_positions_count += 1
+        
+        if closed_orders_count > 0 or closed_positions_count > 0:
+            logger.warning(f"[GRID_CLEANUP] Закрыто удаленных ордеров: {closed_orders_count}, позиций: {closed_positions_count}")
+            
+        return closed_orders_count, closed_positions_count
+
+    def close_distant_orders(self, max_distance=10):
+        """
+        Закрывает ордера, находящиеся дальше указанного количества уровней от EMA
+        
+        Args:
+            max_distance: Максимальное расстояние от EMA в уровнях сетки
+        
+        Returns:
+            Количество закрытых ордеров
         """
         if not self.current_ema:
-            return 1  # если нет EMA, используем дефолтный уровень
-            
-        if order_type == "buy":
-            # Для buy-ордеров: ниже EMA, чем ниже цена, тем больше уровень
-            distance = (self.current_ema - price) / self.current_ema
-            level = max(1, round(distance / (self.grid_step_percent / 100)))
-        else:  # sell
-            # Для sell-ордеров: выше EMA, чем выше цена, тем больше уровень
-            distance = (price - self.current_ema) / self.current_ema
-            level = max(1, round(distance / (self.grid_step_percent / 100)))
+            return 0
             
         logger = logging.getLogger("grid_visualizer")
-        logger.debug(f"[GRID_LEVEL] {order_type} price={price:.4f}, ema={self.current_ema:.4f}, level={level}")
+        logger.info(f"[GRID] Проверка дальних ордеров, макс. расстояние={max_distance} уровней")
         
-        return level
+        closed_count = 0
+        orders_to_remove = []
+        
+        # Проверяем все активные ордера
+        for order in self.orders:
+            if not order.executed:
+                # Рассчитываем уровень сетки для ордера
+                grid_level = self.calculate_grid_level(order.order_type, order.price)
+                
+                # Если уровень превышает максимальное расстояние, закрываем ордер
+                if grid_level > max_distance:
+                    logger.info(f"[GRID] Закрытие удаленного ордера: {order.order_type}, price={order.price:.4f}, level={grid_level}")
+                    
+                    # Возвращаем маржу
+                    released_margin = order.price * order.volume * (1 + MAKER_COMMISSION_RATE)
+                    self.free_margin += released_margin
+                    
+                    orders_to_remove.append(order)
+                    closed_count += 1
+        
+        # Удаляем закрытые ордера из списка
+        for order in orders_to_remove:
+            self.orders.remove(order)
+            
+        if closed_count > 0:
+            logger.info(f"[GRID] Закрыто {closed_count} удаленных ордеров, освобождено маржи: {self.free_margin:.4f}")
+            
+        return closed_count
+
+    def optimize_grid(self, current_price):
+        """
+        Оптимизирует сетку ордеров для соответствия требованиям:
+        - Хватало на 160 потенциальных ордеров
+        - Активными оставались только 10 ближайших к EMA
+        
+        Args:
+            current_price: Текущая цена
+            
+        Returns:
+            bool: True если сетка была оптимизирована
+        """
+        if not self.current_ema:
+            return False
+            
+        logger = logging.getLogger("grid_visualizer")
+        logger.info(f"[GRID] Оптимизация сетки ордеров при EMA={self.current_ema:.4f}")
+        
+        # 1. Закрываем дальние ордера (больше 10 уровней от EMA)
+        closed_count = self.close_distant_orders(10)
+        
+        # 2. Проверяем, хватает ли у нас активных ордеров рядом с EMA
+        active_buy_orders = [order for order in self.orders if not order.executed and order.order_type == "buy"]
+        active_sell_orders = [order for order in self.orders if not order.executed and order.order_type == "sell"]
+        
+        # Сортируем ордера по расстоянию от EMA
+        active_buy_orders.sort(key=lambda o: abs(o.price - self.current_ema))
+        active_sell_orders.sort(key=lambda o: abs(o.price - self.current_ema))
+        
+        # 3. Проверяем, нужно ли добавить ордера у EMA
+        min_orders_per_side = 5  # Минимальное количество ордеров с каждой стороны
+        
+        # Если у нас меньше ордеров, чем требуется, добавляем новые
+        if len(active_buy_orders) < min_orders_per_side or len(active_sell_orders) < min_orders_per_side:
+            logger.info(f"[GRID] Недостаточно ордеров: buy={len(active_buy_orders)}, sell={len(active_sell_orders)}")
+            
+            # Рассчитываем оптимальный объем для новых ордеров
+            base_volume = self.calculate_optimal_volume(current_price)
+            
+            # Добавляем недостающие ордера на покупку
+            if len(active_buy_orders) < min_orders_per_side:
+                needed_buy = min_orders_per_side - len(active_buy_orders)
+                logger.info(f"[GRID] Добавление {needed_buy} buy ордеров")
+                
+                # Определяем, каких уровней не хватает
+                existing_levels = set(self.calculate_grid_level("buy", order.price) for order in active_buy_orders)
+                missing_levels = [i for i in range(1, min_orders_per_side+1) if i not in existing_levels]
+                
+                # Добавляем ордера на недостающие уровни
+                for level in missing_levels[:needed_buy]:
+                    price = self.current_ema * (1 - (self.grid_step_percent / 100) * level)
+                    volume = base_volume * (1.05 ** (level-1))  # Увеличиваем объем для более дальних уровней
+                    
+                    # Проверяем, что цена ниже EMA
+                    if price < self.current_ema and price < current_price:
+                        self.place_order("buy", price, volume)
+                        logger.info(f"[GRID] Добавлен buy ордер: price={price:.4f}, vol={volume:.4f}, level={level}")
+            
+            # Добавляем недостающие ордера на продажу
+            if len(active_sell_orders) < min_orders_per_side:
+                needed_sell = min_orders_per_side - len(active_sell_orders)
+                logger.info(f"[GRID] Добавление {needed_sell} sell ордеров")
+                
+                # Определяем, каких уровней не хватает
+                existing_levels = set(self.calculate_grid_level("sell", order.price) for order in active_sell_orders)
+                missing_levels = [i for i in range(1, min_orders_per_side+1) if i not in existing_levels]
+                
+                # Добавляем ордера на недостающие уровни
+                for level in missing_levels[:needed_sell]:
+                    price = self.current_ema * (1 + (self.grid_step_percent / 100) * level)
+                    volume = base_volume * (1.05 ** (level-1))  # Увеличиваем объем для более дальних уровней
+                    
+                    # Проверяем, что цена выше EMA
+                    if price > self.current_ema and price > current_price:
+                        self.place_order("sell", price, volume)
+                        logger.info(f"[GRID] Добавлен sell ордер: price={price:.4f}, vol={volume:.4f}, level={level}")
+            
+            return True
+            
+        return closed_count > 0  # Считаем сетку оптимизированной, если были закрыты дальние ордера
+
+    def calculate_optimal_volume(self, price, current_balance, target_orders_count=160, active_orders_count=20):
+        """
+        Рассчитывает оптимальный объем для ордеров, чтобы маржи хватило на указанное количество ордеров
+        
+        Args:
+            price: текущая цена
+            current_balance: текущий баланс
+            target_orders_count: целевое количество ордеров, на которое должно хватить маржи (по умолчанию 160)
+            active_orders_count: количество активных ордеров (по умолчанию 20 - по 10 с каждой стороны)
+            
+        Returns:
+            float: оптимальный объем для ордеров
+        """
+        logger = logging.getLogger("grid_visualizer")
+        
+        # Расчет маржинальных требований для одного ордера
+        # Предполагаем, что для ордера нужно около 1% от его стоимости в качестве маржи
+        margin_requirement_percent = 0.01
+        
+        # Маржа, которую мы хотим зарезервировать для активных ордеров
+        margin_for_active_orders = current_balance * 0.2  # 20% баланса для активных ордеров
+        
+        # Маржа, которую мы оставляем в запасе (чтобы система не использовала всю маржу)
+        margin_reserve = current_balance * 0.3  # 30% баланса в резерве
+        
+        # Доступная маржа для ордеров
+        available_margin = current_balance - margin_reserve
+        
+        # Маржа для каждого активного ордера
+        margin_per_active_order = margin_for_active_orders / active_orders_count
+        
+        # Максимальный объем для одного ордера, основанный на доступной марже
+        max_volume_per_order = margin_per_active_order / (price * margin_requirement_percent)
+        
+        # Создаем градацию объемов: ближе к EMA больше объем, дальше - меньше
+        base_volume = max_volume_per_order * 0.5  # Базовый объем для самых дальних ордеров
+        
+        logger.info(f"[VOLUME_CALC] Оптимальный объем рассчитан: {base_volume:.8f} " +
+                   f"(баланс={current_balance:.2f}, цена={price:.2f}, " +
+                   f"доступная маржа={available_margin:.2f})")
+        
+        return base_volume
+
+    def calculate_optimal_order_volume(self, current_price, max_orders=160, active_orders=10):
+        """
+        Рассчитывает оптимальный объем для ордеров в сетке
+        
+        Args:
+            current_price: текущая цена
+            max_orders: максимальное количество ордеров, на которые должно хватить маржи
+            active_orders: количество активных ордеров с каждой стороны от EMA
+        
+        Returns:
+            float: оптимальный объем ордера
+        """
+        logger = logging.getLogger("grid_visualizer")
+        
+        # Получаем текущий свободный баланс
+        free_margin = self.calculate_free_margin()
+        
+        # Рассчитываем средний размер маржи на 1 ордер
+        # Оставляем 20% маржи в запасе для колебаний цены
+        margin_per_order = (free_margin * 0.8) / max_orders
+        
+        # Рассчитываем объем для одного ордера
+        # Учитываем, что чем дальше от EMA, тем меньше должен быть объем
+        base_volume = margin_per_order / current_price
+        
+        # Для ближайших ордеров можем позволить больший объем
+        # Например, для первых 10 ордеров с каждой стороны
+        base_volume_for_active = base_volume * 2
+        
+        logger.info(f"[VOLUME_CONTROL] Расчет оптимального объема: свободная маржа={free_margin:.2f}, " +
+                    f"маржа на ордер={margin_per_order:.2f}, базовый объем={base_volume:.8f}, " +
+                    f"объем для активных ордеров={base_volume_for_active:.8f}")
+        
+        return base_volume_for_active
+
+    def calculate_optimal_volume(self, base_volume, level, max_active_levels=10, total_levels=80):
+        """
+        Рассчитывает оптимальный объем для ордера в зависимости от уровня и доступной маржи
+        
+        Args:
+            base_volume: базовый объем ордера (для первого уровня)
+            level: уровень ордера относительно EMA (1 - ближайший, и т.д.)
+            max_active_levels: максимальное количество активных уровней с каждой стороны
+            total_levels: общее количество уровней с каждой стороны, на которые должно хватить маржи
+            
+        Returns:
+            float: оптимальный объем для данного уровня
+        """
+        logger = logging.getLogger("grid_visualizer")
+        
+        # Если уровень выходит за пределы активных, уменьшаем объем
+        if level > max_active_levels:
+            # За пределами активных уровней возвращаем 0, так как эти ордера не должны размещаться
+            return 0
+            
+        # Внутри активных уровней рассчитываем объем с учетом экспоненциального уменьшения
+        # Объем уменьшается по мере удаления от EMA
+        volume_factor = max(0.5, 1 - (level - 1) * 0.05)  # Уменьшаем объем на 5% с каждым уровнем
+        
+        # Ограничиваем объем, чтобы обеспечить равномерное распределение маржи
+        # Коэффициент распределения маржи: общая маржа разделена между активными уровнями
+        margin_distribution_factor = max_active_levels / total_levels
+        
+        # Применяем коэффициенты к базовому объему
+        optimal_volume = base_volume * volume_factor * margin_distribution_factor
+        
+        logger.debug(f"[VOLUME_CALC] Уровень={level}, базовый объем={base_volume:.8f}, " +
+                     f"фактор объема={volume_factor:.2f}, фактор маржи={margin_distribution_factor:.2f}, " +
+                     f"итоговый объем={optimal_volume:.8f}")
+        
+        return optimal_volume
+        
+    def update_ema_and_grid(self, current_price, new_ema):
+        """
+        Обновляет значение EMA и корректирует сетку ордеров при необходимости
+        
+        Args:
+            current_price: Текущая цена
+            new_ema: Новое значение EMA
+            
+        Returns:
+            bool: True если сетка была обновлена
+        """
+        # Проверяем, изменилось ли значение EMA значительно
+        significant_change = False
+        
+        if self.current_ema is not None:
+            # Рассчитываем относительное изменение EMA
+            ema_change = abs(new_ema - self.current_ema) / self.current_ema
+            significant_change = ema_change > 0.01  # Если изменение больше 1%
+        
+        # Обновляем значение EMA
+        old_ema = self.current_ema
+        self.current_ema = new_ema
+        
+        # Если изменение значительное или сетка не инициализирована
+        if significant_change or not self.initial_grid_created:
+            logger = logging.getLogger("grid_visualizer")
+            logger.info(f"[GRID] Значительное изменение EMA: {new_ema:.4f} (было {old_ema:.4f if old_ema else 0:.4f}), пересчет сетки")
+            
+            # Закрываем ордера, которые слишком далеко от новой EMA
+            closed_count = self.close_distant_orders(new_ema, 10)
+            logger.info(f"[GRID] Закрыто {closed_count} удаленных ордеров")
+            
+            # Рассчитываем оптимальный объем для новых ордеров
+            optimal_volume = self.calculate_optimal_volume(
+                current_price,
+                self.free_margin,
+                target_orders_count=160,  # Хотим, чтобы маржи хватило на 160 ордеров
+                active_orders_count=20    # Но активными будут только 20 (по 10 с каждой стороны)
+            )
+            
+            # Создаем сетку вокруг новой EMA
+            lower_bound = new_ema * (1 - self.grid_step_percent * 10 / 100)  # 10 уровней вниз
+            upper_bound = new_ema * (1 + self.grid_step_percent * 10 / 100)  # 10 уровней вверх
+            
+            # Создаем массивы цен для buy и sell ордеров
+            buy_prices = []
+            for i in range(1, 11):  # 10 уровней
+                price = new_ema * (1 - self.grid_step_percent * i / 100)
+                buy_prices.append(price)
+            
+            sell_prices = []
+            for i in range(1, 11):  # 10 уровней
+                price = new_ema * (1 + self.grid_step_percent * i / 100)
+                sell_prices.append(price)
+            
+            # Размещаем новые ордера с оптимальным объемом
+            for i, price in enumerate(buy_prices):
+                # Уменьшаем объем для более дальних уровней
+                level_volume = optimal_volume * (1 - i * 0.05)  # Уменьшаем на 5% с каждым уровнем
+                if price < current_price:  # Размещаем только ниже текущей цены
+                    self.place_order("buy", price, level_volume)
+            
+            for i, price in enumerate(sell_prices):
+                # Уменьшаем объем для более дальних уровней
+                level_volume = optimal_volume * (1 - i * 0.05)  # Уменьшаем на 5% с каждым уровнем
+                if price > current_price:  # Размещаем только выше текущей цены
+                    self.place_order("sell", price, level_volume)
+            
+            # Обновляем границы сетки
+            self.current_grid_bounds = (lower_bound, upper_bound)
+            
+            # Обновляем виртуальную сетку
+            self._build_virtual_grid()
+            
+            return True
+        
+        # Если изменение незначительное, проверяем только наличие нужных ордеров
+        elif self.grid_check_counter >= self.grid_check_interval:
+            self.grid_check_counter = 0
+            
+            # Проверяем, нужно ли добавить недостающие ордера
+            active_buy_orders = [order for order in self.orders if not order.executed and order.order_type == "buy"]
+            active_sell_orders = [order for order in self.orders if not order.executed and order.order_type == "sell"]
+            
+            # Проверяем, есть ли у нас хотя бы 5 ордеров на покупку и продажу
+            min_required = 5
+            
+            if len(active_buy_orders) < min_required or len(active_sell_orders) < min_required:
+                logger = logging.getLogger("grid_visualizer")
+                logger.info(f"[GRID] Недостаточно ордеров: buy={len(active_buy_orders)}, sell={len(active_sell_orders)}, добавляю недостающие")
+                
+                # Рассчитываем оптимальный объем
+                optimal_volume = self.calculate_optimal_volume(
+                    current_price,
+                    self.free_margin,
+                    target_orders_count=160,
+                    active_orders_count=10
+                )
+                
+                # Добавляем недостающие ордера на покупку
+                if len(active_buy_orders) < min_required:
+                    # Определяем, каких уровней не хватает
+                    existing_levels = set()
+                    for order in active_buy_orders:
+                        level = round((new_ema - order.price) / (new_ema * self.grid_step_percent / 100))
+                        existing_levels.add(level)
+                    
+                    # Добавляем недостающие уровни
+                    for level in range(1, 11):
+                        if level not in existing_levels and len(active_buy_orders) < min_required:
+                            price = new_ema * (1 - self.grid_step_percent * level / 100)
+                            if price < current_price:  # Размещаем только ниже текущей цены
+                                volume = optimal_volume * (1 - (level-1) * 0.05)  # Уменьшаем объем с каждым уровнем
+                                self.place_order("buy", price, volume)
+                
+                # Добавляем недостающие ордера на продажу
+                if len(active_sell_orders) < min_required:
+                    # Определяем, каких уровней не хватает
+                    existing_levels = set()
+                    for order in active_sell_orders:
+                        level = round((order.price - new_ema) / (new_ema * self.grid_step_percent / 100))
+                        existing_levels.add(level)
+                    
+                    # Добавляем недостающие уровни
+                    for level in range(1, 11):
+                        if level not in existing_levels and len(active_sell_orders) < min_required:
+                            price = new_ema * (1 + self.grid_step_percent * level / 100)
+                            if price > current_price:  # Размещаем только выше текущей цены
+                                volume = optimal_volume * (1 - (level-1) * 0.05)  # Уменьшаем объем с каждым уровнем
+                                self.place_order("sell", price, volume)
+                
+                return True
+        
+        return False
+
+    def process_tick(self, current_price, ema_price, timestamp):
+        """
+        Метод обработки тика цены с оптимизацией сетки и управлением маржой
+        
+        Args:
+            current_price: текущая цена
+            ema_price: текущее значение EMA
+            timestamp: временная метка
+            
+        Returns:
+            bool: True если были исполнены ордера или обновлена сетка
+        """
+        # Обновляем текущие значения
+        self.current_price = current_price
+        
+        # Обрабатываем историю цен для аналитики
+        self.price_history.append(current_price)
+        if len(self.price_history) > 1000:  # Ограничиваем длину истории
+            self.price_history = self.price_history[-1000:]
+            
+        # Добавляем временную метку
+        self.timestamps.append(timestamp)
+        if len(self.timestamps) > 1000:
+            self.timestamps = self.timestamps[-1000:]
+            
+        # Проверяем и исполняем ордера
+        executed_orders = self.check_orders(current_price, timestamp)
+        
+        # Обновляем плавающую прибыль
+        self.calculate_floating_profit(current_price)
+        
+        # Увеличиваем счетчик проверок сетки
+        self.grid_check_counter += 1
+        
+        # Проверяем условия для обновления сетки
+        grid_updated = False
+        
+        # Обновляем значение EMA и сетку при необходимости
+        if ema_price is not None and self.orders_enabled:
+            grid_updated = self.update_ema_and_grid(current_price, ema_price)
+            
+        # Закрываем удаленные ордера (больше 10 уровней от EMA)
+        if self.grid_check_counter >= self.grid_check_interval and ema_price is not None:
+            self.grid_check_counter = 0
+            if self.close_distant_orders(10) > 0:
+                # Если закрыли удаленные ордера, обновляем маржу
+                self.calculate_free_margin()
+                grid_updated = True
+        
+        # Обновляем статистику цен для анализа распределения
+        self.update_price_distribution(current_price)
+        
+        # Проверяем необходимость хеджирования
+        if self.hedge_active:
+            self.hedge_counter += 1
+            if self.hedge_counter >= self.hedge_update_frequency:
+                self.hedge_counter = 0
+                # Обновляем хеджирующие позиции
+                self.options_manager.update_hedge_positions(current_price)
+                
+        # Возвращаем True, если были исполнены ордера или обновлена сетка
+        return executed_orders or grid_updated
