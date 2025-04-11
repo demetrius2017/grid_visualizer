@@ -556,36 +556,45 @@ class OrderManager:
 
         return lower_bound, upper_bound
 
-    def check_orders(self, current_price, execution_index=None):
-        """Проверка ордеров с улучшенной логикой хеджирования"""
-        self.current_price = current_price
-        last_price = self.price_history[-2] if len(self.price_history) > 1 else current_price
-        self.calculate_floating_profit(current_price)
-
-        # Проверяем ордера, которые должны быть исполнены
-        executed_any = False
+    def check_orders(self, current_price, timestamp):
+        """Проверяет и исполняет подходящие ордера"""
         for order in self.orders:
             if not order.executed:
-                # Проверка для близкой цены (точное совпадение)
-                if abs(order.price - current_price) / current_price < 0.001:
-                    is_maker = abs(order.price - current_price) < 0.0001
-                    self.execute_order(order, order.price, is_maker)
-                    if execution_index is not None:
-                        order.execution_time = execution_index
-                    executed_any = True
-                    
-                # Проверка для цены, которая прошла через уровень ордера (пересечение)
-                elif (order.order_type == "buy" and current_price >= order.price and last_price < order.price) or \
-                     (order.order_type == "sell" and current_price <= order.price and last_price > order.price):
-                    is_maker = False  # Если произошло пересечение, то это почти всегда taker
-                    self.execute_order(order, order.price, is_maker)
-                    if execution_index is not None:
-                        order.execution_time = execution_index
-                    executed_any = True
+                if order.order_type == "buy" and current_price <= order.price:
+                    self.execute_order(order, order.price, timestamp)
+                elif order.order_type == "sell" and current_price >= order.price:
+                    self.execute_order(order, order.price, timestamp)
 
-        # Вызываем стандартную логику только если не исполнили ни одного ордера выше
-        if not executed_any:
-            self._check_order_execution(current_price)
+    def execute_order(self, order, price, timestamp):
+        """Исполняет ордер с сохранением временной метки"""
+        try:
+            if not order.executed:
+                order.execution_price = price
+                order.execution_time = timestamp
+                order.executed = True
+                
+                # Обновляем баланс и комиссию
+                self.balance -= order.commission
+                self.total_commission += order.commission
+                
+                # Добавляем в историю исполненных ордеров
+                self.order_history.append(order)
+                
+                # Логируем исполнение
+                logger = logging.getLogger("grid_visualizer")
+                logger.info(
+                    f"[ORDER] Executed {order.order_type} order at {price:.8f}, "
+                    f"time={timestamp}, commission={order.commission:.8f}"
+                )
+                return True
+                
+        except Exception as e:
+            logger = logging.getLogger("grid_visualizer")
+            logger.error(f"[ORDER] Error executing order: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+        return False
 
     def _check_order_execution(self, current_price):
         """Проверка исполнения ордеров с учетом типа комиссии"""
@@ -600,35 +609,6 @@ class OrderManager:
                     # Определяем, является ли ордер мейкером или тейкером
                     is_maker = abs(order.price - current_price) < 0.0001
                     self.execute_order(order, order.price, is_maker)
-
-    def execute_order(self, order, execution_price, is_maker=True):
-        """Исполнение ордера с учетом типа комиссии"""
-        order.executed = True
-        order.execution_price = execution_price
-        order.is_maker = is_maker
-        order.execution_time = len(self.price_history) - 1
-        order.commission = (
-            order.volume * execution_price * (MAKER_COMMISSION_RATE if is_maker else TAKER_COMMISSION_RATE)
-        )
-
-        opposite_position = next((pos for pos in self.positions if pos.order_type != order.order_type), None)
-
-        if opposite_position:
-            profit = opposite_position.close_position(execution_price, is_maker)
-            self.total_profit += profit
-            self.balance = self.initial_balance + self.total_profit - self.total_commission
-            self.closed_positions.append(opposite_position)
-            self.positions.remove(opposite_position)
-        else:
-            new_position = Position(order.order_type, execution_price, order.volume, is_maker)
-            self.positions.append(new_position)
-            self.total_commission += order.commission
-
-        self.orders.remove(order)
-        self.order_history.append(order)
-        self.calculate_floating_profit(execution_price)
-        self.calculate_free_margin()
-        self.place_counter_order(order, execution_price)
 
     def estimate_grid_volume(self):
         """Оценка потенциального объема всей сетки"""

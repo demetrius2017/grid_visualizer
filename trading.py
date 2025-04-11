@@ -37,6 +37,7 @@ class TradingSimulator:
         self.gui_update_interval = 100  # Обновлять UI каждые 100 тиков
         self.update_counter = 0  # Явно инициализируем счетчик обновлений
         self.timestamps = []  # Инициализируем список временных меток
+        self.execution_time_map = {}  # глобальная карта индексов к timestamp
         if self.simulation_mode == "file" and self.file_prices:
             self.current_price = self.file_prices[0]  # Устанавливаем начальную цену из файла
         else:
@@ -190,16 +191,30 @@ class TradingSimulator:
                     self.stop()
                     return
                 
-                # Получаем новую цену из файла
-                _, new_price, _ = self.file_prices[self.file_index]
+                # Получаем новую цену из файла и timestamp
+                timestamp, new_price, _ = self.file_prices[self.file_index]
+                self.execution_time_map[len(self.prices)] = timestamp
                 self.file_index += 1
+                
+                # Устанавливаем текущую цену и timestamp в order_manager
                 self.current_price = new_price
+                self.order_manager.current_price = new_price
+                self.order_manager.execution_time = timestamp
+                
                 self.prices.append(new_price)
+                
+                # Проверяем ордера с учетом timestamp
+                if self.update_counter % 2 == 0:  # Проверяем ордера каждые 2 тика
+                    self.order_manager.check_orders(self.current_price, timestamp)
             else:
                 # Случайная генерация цены
                 new_price = max(0, self.current_price + np.random.uniform(-self.volatility, self.volatility))
                 self.prices.append(new_price)
                 self.current_price = new_price
+                
+                # Для random mode используем len(prices) как timestamp
+                current_time = len(self.prices)
+                self.order_manager.check_orders(self.current_price, current_time)
 
             # Обновляем EMA после добавления новой цены
             if len(self.prices) >= self.ema_period:
@@ -212,10 +227,6 @@ class TradingSimulator:
                 self.order_manager.current_ema = self.ema[-1]
             else:
                 self.ema.append(self.current_price)
-                
-            # Контролируем частоту проверки ордеров для оптимизации производительности
-            if self.update_counter % 2 == 0:  # Проверяем ордера каждые 2 тика
-                self.order_manager.check_orders(self.current_price, len(self.prices))
                 
             # Обновляем историю в OrderManager
             self.order_manager.price_history = self.prices
@@ -267,75 +278,51 @@ class TradingSimulator:
         print(f"Grid settings updated: grid_size={self.grid_size}, volatility={self.volatility}")
 
     def update_display(self):
-        """Обновление отображения с передачей временных меток"""
+        """Обновление отображения графика"""
         try:
-            # Получаем текущие ордера
-            max_orders = 50  # Ограничиваем для производительности
+            # Определяем видимый диапазон
+            visible_range = getattr(self.graph, 'visible_range', 1000)
             
-            # Получаем только активные ордера с сортировкой по близости к текущей цене
-            all_buy_orders = [o for o in self.order_manager.orders if o.order_type == "buy" and not o.executed]
-            all_sell_orders = [o for o in self.order_manager.orders if o.order_type == "sell" and not o.executed]
-            
-            # Сортируем по близости к текущей цене
-            all_buy_orders.sort(key=lambda o: abs(o.price - self.current_price))
-            all_sell_orders.sort(key=lambda o: abs(o.price - self.current_price))
-            
-            buy_orders = all_buy_orders[:max_orders]
-            sell_orders = all_sell_orders[:max_orders]
-            
-            # Получаем историю ордеров для отображения
-            order_history = self.order_manager.get_order_history()
-            
-            # Оптимизация: вместо создания новых списков ордеров, используем существующие
-            distribution_data = self.order_manager.get_price_distribution_data()
+            # Ограничиваем данные видимым диапазоном
+            price_data = self.prices[-visible_range:]
+            ema_data = self.ema[-visible_range:] if len(self.ema) >= len(price_data) else \
+                [np.nan] * (len(price_data) - len(self.ema)) + self.ema
 
-            # Получаем последние данные (ограничиваем количество для производительности)
-            max_points = 1000
-            price_data = self.prices[-max_points:]
-            
-            # Проверяем наличие данных
-            if not price_data:
-                logger = logging.getLogger("grid_visualizer")
-                logger.warning("[DISPLAY] price_data пуст — график не обновится")
-                return
-            
-            # Подготавливаем EMA данные
-            if len(self.ema) >= len(price_data):
-                ema_data = self.ema[-len(price_data):]
-            else:
-                # Заполняем начало NaN для соответствия длине price_data
-                import numpy as np
-                ema_data = [np.nan] * (len(price_data) - len(self.ema)) + self.ema
-            
-            # Важно: корректируем timestamps для соответствия текущему срезу данных
-            current_timestamps = None
+            # Получаем соответствующие временные метки
             if self.simulation_mode == "file" and self.timestamps:
-                # Берём соответствующий срез временных меток
-                last_index = self.file_index if self.file_index > 0 else len(self.timestamps)
-                start_index = max(0, last_index - len(price_data))
-                current_timestamps = self.timestamps[start_index:last_index]
-            
-            # Обновляем график с данными и метками
+                start_index = max(0, self.file_index - len(price_data))
+                current_timestamps = self.timestamps[start_index:self.file_index]
+            else:
+                current_timestamps = None
+
+            # Автоматическое удаление старых точек из буфера
+            max_buffer = visible_range * 2  # Храним в 2 раза больше точек чем visible_range
+            if len(self.prices) > max_buffer:
+                self.prices = self.prices[-max_buffer:]
+            if len(self.ema) > max_buffer:
+                self.ema = self.ema[-max_buffer:]
+
+            # Получаем данные из order_manager
+            buy_orders = [order for order in self.order_manager.orders if order.order_type == "buy" and not order.executed]
+            sell_orders = [order for order in self.order_manager.orders if order.order_type == "sell" and not order.executed]
+            order_history = self.order_manager.get_order_history()
+            price_distribution = self.order_manager.get_price_distribution() if hasattr(self.order_manager, 'get_price_distribution') else None
+
+            # Обновляем график с передачей карты временных меток
             self.graph.set_full_data(
                 price_data,
                 ema_data,
                 buy_orders,
                 sell_orders,
-                order_history,  # Передаем актуальную историю ордеров
-                distribution_data,
-                timestamps=current_timestamps
+                order_history,
+                price_distribution,
+                current_timestamps,
+                execution_map=self.execution_time_map
             )
-            
-            # Обновляем историю ордеров на графике
-            self.graph.update_order_history(order_history)
-            
-            # Логируем успешное обновление
-            logger = logging.getLogger("grid_visualizer")
-            logger.debug(f"[UPDATE_DISPLAY] Данные обновлены: график обновлен (timestamps: {'yes' if current_timestamps else 'no'})")
-        
+
         except Exception as e:
             logger = logging.getLogger("grid_visualizer")
-            logger.error(f"[DISPLAY] Ошибка при обновлении дисплея: {str(e)}")
+            logger.error(f"[TRADING] Ошибка в update_display: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
 
@@ -356,7 +343,7 @@ class TradingSimulator:
             total_commission,
             hedge_metrics,  # Добавляем метрики хеджирования
         )
-        self.graph.update_order_history(self.order_manager.get_order_history())
+        # Убираем дублирующий вызов, так как сделки отрисовываются в update_display()
 
     def update_balances(self):
         self.balance_history.append(self.order_manager.get_balance())
@@ -482,4 +469,31 @@ class TradingSimulator:
                 # Логируем для отладки
                 logger = logging.getLogger("grid_visualizer")
                 logger.info(f"[MEMORY] Очищена история ордеров: осталось {len(self.order_manager.order_history)} из {len(executed_orders) + len(non_executed_orders)}")
+
+    def execute_order(self, order, current_price, index):
+        """Исполнение ордера с сохранением временной метки исполнения"""
+        try:
+            if not order.executed:
+                order.execution_price = current_price
+                if self.simulation_mode == "file" and self.timestamps:
+                    # Используем реальную временную метку из файла
+                    order.execution_time = self.timestamps[index]
+                else:
+                    # В случае random mode используем индекс как временную метку
+                    order.execution_time = index
+                
+                order.executed = True
+                
+                # Логируем исполнение ордера
+                logger = logging.getLogger("grid_visualizer")
+                logger.info(
+                    f"[ORDER] Executed order ID={order.id}, type={order.order_type}, "
+                    f"price={order.execution_price:.8f}, time={order.execution_time}"
+                )
+                
+                return True
+        except Exception as e:
+            logger = logging.getLogger("grid_visualizer")
+            logger.error(f"[ORDER] Error executing order: {str(e)}")
+        return False
 

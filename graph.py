@@ -2,7 +2,17 @@ from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 import numpy as np
 import logging
-from tkinter import messagebox
+import datetime
+from pyqtgraph import AxisItem
+
+
+class TimeAxisItem(AxisItem):
+    def tickStrings(self, values, scale, spacing):
+        """Конвертирует timestamp в читаемый формат времени"""
+        try:
+            return [datetime.datetime.fromtimestamp(value).strftime("%H:%M") for value in values]
+        except Exception:
+            return [str(value) for value in values]
 
 
 class MarketGraph(QtWidgets.QWidget):
@@ -22,6 +32,11 @@ class MarketGraph(QtWidgets.QWidget):
         # Флаги для отслеживания состояния
         self.graph_initialized = False
         self.ema_visible = True
+        self.auto_scroll = True  # Флаг для автопрокрутки
+        
+        # Настраиваем обработку колеса мыши
+        self.graphWidget.scene().sigWheelScrolled = self.handle_mouse_wheel
+        self.graphWidget.wheelEvent = self.mouse_wheel_event
 
     def init_ui(self):
         # Основной вертикальный layout
@@ -30,17 +45,14 @@ class MarketGraph(QtWidgets.QWidget):
         # Создаем QSplitter для вертикального разделения
         splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
 
-        # Верхний график (Market Price Simulation)
-        self.graphWidget = pg.PlotWidget()
+        # Верхний график (Market Price Simulation) с кастомной осью времени
+        self.graphWidget = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
         self.graphWidget.setTitle("Market Price Simulation")
         self.graphWidget.setLabel("left", "Price")
-        self.graphWidget.setLabel("bottom", "Time")
+        self.graphWidget.setLabel("bottom", "Time (HH:MM)")
         self.graphWidget.showGrid(x=True, y=True)
         
-        # Настраиваем форматирование оси X
-        self.setup_time_axis()
-        
-        # Устанавливаем минимальную высоту для графика, чтобы избежать его исчезновения
+        # Устанавливаем минимальную высоту для графика
         self.graphWidget.setMinimumHeight(250)
         self.graphWidget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         splitter.addWidget(self.graphWidget)
@@ -78,6 +90,13 @@ class MarketGraph(QtWidgets.QWidget):
         # Отчет
         self.report_label = QtWidgets.QLabel()
         main_layout.addWidget(self.report_label)
+
+        # Добавляем кнопку для управления автопрокруткой
+        self.scroll_lock_button = QtWidgets.QPushButton("🔒 Auto-scroll ON")
+        self.scroll_lock_button.setCheckable(True)
+        self.scroll_lock_button.setChecked(True)
+        self.scroll_lock_button.clicked.connect(self.toggle_auto_scroll)
+        main_layout.addWidget(self.scroll_lock_button)
 
         self.init_plot_items()
 
@@ -158,35 +177,49 @@ class MarketGraph(QtWidgets.QWidget):
             self.distribution_graph.setYRange(0, 1.1)  # Нормализованный диапазон от 0 до 1
 
     def update_graph(self, price_data):
+        """Обновление графика с использованием временных меток"""
         if not price_data:
             self.logger.warning("[GRAPH] Нет данных для обновления графика")
-            self.graphWidget.update()
             return
 
-        # Используем timestamps напрямую как float значения, или fallback к range
-        x_data = range(len(price_data))
-        if self.timestamps and len(self.timestamps) == len(price_data):
-            x_data = self.timestamps
+        try:
+            start = max(0, self.data_offset)
+            end = min(start + self.visible_range, len(price_data))
+            visible_data = price_data[start:end]
 
-        if len(price_data) > self.visible_range:
-            self.scroll_bar.setMaximum(len(price_data) - self.visible_range)
-            self.scroll_bar.setPageStep(self.visible_range)
-        else:
-            self.scroll_bar.setMaximum(0)
+            # Определяем X координаты на основе временных меток или индексов
+            if self.timestamps and len(self.timestamps) >= end:
+                x_data = self.timestamps[start:end]
+                # Обновляем scroll_bar на основе индексов, а не временных меток
+                if len(price_data) > self.visible_range:
+                    self.scroll_bar.setMaximum(len(price_data) - self.visible_range)
+                    self.scroll_bar.setPageStep(self.visible_range)
+                else:
+                    self.scroll_bar.setMaximum(0)
+            else:
+                x_data = list(range(start, end))
 
-        visible_data = price_data[self.data_offset : self.data_offset + self.visible_range]
-        visible_x = x_data[self.data_offset : self.data_offset + self.visible_range]
+            # Обновляем график
+            self.price_curve.setData(x=x_data, y=visible_data)
 
-        if not visible_data:
-            self.logger.warning("[GRAPH] Видимые данные отсутствуют")
-            return
+            # Устанавливаем диапазон осей для текущего набора данных
+            if x_data:
+                self.graphWidget.setXRange(x_data[0], x_data[-1])
 
-        self.price_curve.setData(visible_x, visible_data)
+        except Exception as e:
+            self.logger.error(f"[GRAPH] Ошибка при обновлении графика: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def update_ema(self, ema_data):
         if ema_data:
             visible_ema = ema_data[self.data_offset : self.data_offset + self.visible_range]
-            self.ema_curve.setData(range(len(visible_ema)), visible_ema)
+            # Используем те же временные метки, что и для цены
+            if self.timestamps and len(self.timestamps) >= self.data_offset + self.visible_range:
+                x_data = self.timestamps[self.data_offset : self.data_offset + self.visible_range]
+            else:
+                x_data = list(range(len(visible_ema)))
+            self.ema_curve.setData(x_data, visible_ema)
             self.ema_curve.show()
 
     def update_report(self, balance, profit, floating_profit, free_margin, total_commission, hedge_metrics):
@@ -243,7 +276,7 @@ class MarketGraph(QtWidgets.QWidget):
         """Улучшенный метод автоматического масштабирования представления графика"""
         try:
             if not hasattr(self, 'full_price_data') or not self.full_price_data:
-                # Если данных нет, но есть текущая цена - используем её
+                # if данных нет, но есть текущая цена - используем её
                 if hasattr(self, 'current_price') and self.current_price:
                     self.graphWidget.setYRange(
                         self.current_price * 0.9,  # -10% от текущей цены
@@ -251,18 +284,21 @@ class MarketGraph(QtWidgets.QWidget):
                     )
                 return
 
-            # Собираем все цены для расчета диапазона
-            all_prices = self.full_price_data[:]
-            
-            # Добавляем цены ордеров, если они есть
-            if hasattr(self, 'full_buy_orders') and self.full_buy_orders:
-                all_prices.extend([order.price for order in self.full_buy_orders])
-            if hasattr(self, 'full_sell_orders') and self.full_sell_orders:
-                all_prices.extend([order.price for order in self.full_sell_orders])
+            # Используем только видимые данные
+            if len(self.full_price_data) >= self.visible_range:
+                visible_prices = self.full_price_data[-self.visible_range:]
+            else:
+                visible_prices = self.full_price_data[:]
 
-            if all_prices:
-                min_price = min(all_prices)
-                max_price = max(all_prices)
+            # Добавляем ордера к видимым данным
+            if hasattr(self, 'full_buy_orders') and self.full_buy_orders:
+                visible_prices.extend([order.price for order in self.full_buy_orders])
+            if hasattr(self, 'full_sell_orders') and self.full_sell_orders:
+                visible_prices.extend([order.price for order in self.full_sell_orders])
+
+            if visible_prices:
+                min_price = min(visible_prices)
+                max_price = max(visible_prices)
                 price_range = max_price - min_price
 
                 # Добавляем отступы для лучшей видимости (15% от диапазона цен)
@@ -275,14 +311,13 @@ class MarketGraph(QtWidgets.QWidget):
                 # Устанавливаем видимый диапазон по X
                 visible_points = min(len(self.full_price_data), self.visible_range)
                 if visible_points > 0:
-                    start_index = max(0, len(self.full_price_data) - visible_points)
-                    if self.timestamps and len(self.timestamps) > start_index:
+                    if self.timestamps and len(self.timestamps) >= visible_points:
                         self.graphWidget.setXRange(
-                            self.timestamps[start_index],
-                            self.timestamps[start_index + visible_points - 1]
+                            self.timestamps[0],
+                            self.timestamps[-1]
                         )
                     else:
-                        self.graphWidget.setXRange(start_index, start_index + visible_points)
+                        self.graphWidget.setXRange(0, visible_points)
 
         except Exception as e:
             self.logger.error(f"[GRAPH] Ошибка в auto_scale_view: {str(e)}")
@@ -302,6 +337,11 @@ class MarketGraph(QtWidgets.QWidget):
             
             if value is not None:
                 self.data_offset = value
+                # Если пользователь вручную двигает ползунок и он не в конце
+                if value < self.scroll_bar.maximum():
+                    self.auto_scroll = False
+                    self.scroll_lock_button.setChecked(False)
+                    self.scroll_lock_button.setText("🔓 Auto-scroll OFF")
             else:
                 self.data_offset = max(0, len(self.full_price_data) - self.visible_range)
             
@@ -312,7 +352,7 @@ class MarketGraph(QtWidgets.QWidget):
             if not visible_data:
                 return
                 
-            # Используем временные метки, если они доступны
+            # Используем временные метки, if они доступны
             if self.timestamps and len(self.timestamps) >= end:
                 x_data = self.timestamps[start:end]
             else:
@@ -340,6 +380,13 @@ class MarketGraph(QtWidgets.QWidget):
 
             # Обновляем историю ордеров с учётом временных меток
             self.update_order_history_aligned(self.full_order_history, start, x_data)
+            
+            # Автоматически масштабируем по оси Y при скролле
+            self.auto_scale_view()
+            
+            # Автопрокрутка только если включена
+            if self.auto_scroll:
+                self.scroll_bar.setValue(self.scroll_bar.maximum())
             
         except Exception as e:
             self.logger.error(f"[GRAPH] Ошибка при обновлении видимого диапазона: {str(e)}")
@@ -376,33 +423,44 @@ class MarketGraph(QtWidgets.QWidget):
             
         return True
 
-    def update_order_history(self, order_history):
+    def update_order_history(self, order_history, execution_map=None):
         visible_history = order_history[-self.visible_range:]
         history_spots = []
         
-        for i, order in enumerate(visible_history):
-            if order.executed and hasattr(order, 'execution_price') and order.execution_price is not None:
-                if self.timestamps and order.execution_time is not None and order.execution_time < len(self.timestamps):
-                    x_coord = self.timestamps[order.execution_time]
-                else:
-                    x_coord = order.execution_time if order.execution_time is not None else i
-                spot = {
-                    "pos": (x_coord, order.execution_price),
-                    "data": 1,
-                    "brush": pg.mkBrush(0, 255, 0, 220) if order.order_type == "buy" else pg.mkBrush(255, 0, 0, 220),
-                    "symbol": 'o',
-                    "size": 15
-                }
-                history_spots.append(spot)
+        for order in visible_history:
+            if not order.executed or not hasattr(order, 'execution_price') or order.execution_price is None:
+                continue
+                
+            # Используем карту времени исполнения, если доступна
+            if execution_map and order.execution_time in execution_map:
+                x_coord = execution_map[order.execution_time]
+            elif self.timestamps and order.execution_time is not None and order.execution_time < len(self.timestamps):
+                x_coord = self.timestamps[order.execution_time]
+            else:
+                x_coord = order.execution_time
+
+            # Детальное логирование
+            self.logger.debug(
+                f"[ORDER-HISTORY] Order ID={order.id} @t={order.execution_time}, "
+                f"x={x_coord}, y={order.execution_price}, type={order.order_type}"
+            )
+                
+            spot = {
+                "pos": (x_coord, order.execution_price),
+                "data": 1,
+                "brush": pg.mkBrush(0, 255, 0, 220) if order.order_type == "buy" else pg.mkBrush(255, 0, 0, 220),
+                "symbol": 'o',
+                "size": 15
+            }
+            history_spots.append(spot)
         
         self.order_history_curve.setData(history_spots)
         if history_spots:
-            print(f"[HISTORY] Отрисовано {len(history_spots)} сделок на графике цены")
+            self.logger.debug(f"[HISTORY] Отрисовано {len(history_spots)} сделок на графике цены")
 
     def update_order_history_aligned(self, order_history, start_offset, x_data):
         """
-        Исправленная функция обновления истории ордеров
-        для предотвращения отрыва маркеров от графика цены
+        Исправленная функция обновления истории ордеров с корректной привязкой к временным меткам
         """
         try:
             # Сохраняем существующий подход, но исправляем позиционирование
@@ -416,98 +474,100 @@ class MarketGraph(QtWidgets.QWidget):
             if len(recent_history) > max_visible_history:  
                 recent_history = recent_history[-max_visible_history:]
             
+            self.logger.debug(f"[ORDER-HISTORY] Processing orders. start_offset={start_offset}, x_data_len={len(x_data)}")
+            
             # Создаем массив данных для графика
             history_spots = []
             
-            # ИСПРАВЛЕНИЕ: Гарантируем, что позиция маркера соответствует видимому диапазону
+            # Правильное позиционирование маркеров
             for order in recent_history:
                 # Проверяем правильность позиции исполнения
                 if not hasattr(order, 'execution_time') or order.execution_time is None:
                     continue
                 
+                # Проверяем, что execution_time попадает в видимый диапазон
+                if not (start_offset <= order.execution_time < start_offset + len(x_data)):
+                    self.logger.debug(
+                        f"[ORDER-HISTORY] Skipping Order ID={order.id} - out of range. "
+                        f"execution_time={order.execution_time} not in [{start_offset}, {start_offset + len(x_data)}]"
+                    )
+                    continue
+                
                 # Безопасно получаем позицию относительно текущего диапазона
                 abs_position = min(max(0, int(order.execution_time)), len(self.full_price_data) - 1)
+                rel_position = abs_position - start_offset
+
+                # Новый безопасный способ получения координаты X
+                if hasattr(self, 'execution_map') and self.execution_map and order.execution_time in self.execution_map:
+                    x_coord = self.execution_map[order.execution_time]
+                    self.logger.debug(
+                        f"[ORDER-HISTORY] Using execution_map for Order ID={order.id}: "
+                        f"execution_time={order.execution_time}, x_coord={x_coord}"
+                    )
+                elif 0 <= rel_position < len(x_data):
+                    x_coord = x_data[rel_position]
+                    self.logger.debug(
+                        f"[ORDER-HISTORY] Using x_data for Order ID={order.id}: "
+                        f"rel_position={rel_position}, x_coord={x_coord}"
+                    )
+                else:
+                    self.logger.debug(
+                        f"[ORDER-HISTORY] Skipping Order ID={order.id}: invalid position calculation"
+                    )
+                    continue
+
+                # Создаем точку с корректными координатами
+                spot = {
+                    "pos": (x_coord, order.execution_price),
+                    "data": order.id,
+                    "brush": pg.mkBrush(0, 255, 0, 200) if order.order_type == "buy" else pg.mkBrush(255, 0, 0, 200),
+                    "symbol": 'o',
+                    "size": 10
+                }
+                history_spots.append(spot)
                 
-                # Проверяем, попадает ли маркер в видимый диапазон (с запасом)
-                if start_offset - 3 <= abs_position < start_offset + len(x_data) + 3:
-                    # Вычисляем правильную относительную позицию в видимом диапазоне
-                    rel_position = abs_position - start_offset
-                    
-                    # Создаем точку с корректными координатами
-                    if 0 <= rel_position < len(x_data):  # Проверяем, что позиция в пределах массива
-                        spot = {
-                            "pos": (rel_position, order.execution_price),
-                            "data": order.id,
-                            "brush": pg.mkBrush(0, 255, 0, 200) if order.order_type == "buy" else pg.mkBrush(255, 0, 0, 200),
-                            "symbol": 'o',
-                            "size": 10  # Увеличенный размер для лучшей видимости
-                        }
-                        history_spots.append(spot)
+                self.logger.debug(
+                    f"[ORDER-HISTORY] Added spot for Order ID={order.id}: "
+                    f"x={x_coord}, y={order.execution_price}, type={order.order_type}"
+                )
             
             # Обновляем данные кривой истории ордеров
             self.order_history_curve.setData(history_spots)
+            self.logger.debug(f"[ORDER-HISTORY] Updated {len(history_spots)} spots on graph")
             
         except Exception as e:
-            print(f"Error in update_order_history_aligned: {e}")
+            self.logger.error(f"[GRAPH] Ошибка в update_order_history_aligned: {str(e)}")
             import traceback
-            print(traceback.format_exc())
+            self.logger.error(traceback.format_exc())
 
-    def set_full_data(self, price_data, ema_data, buy_orders, sell_orders, order_history, distribution_data, timestamps=None):
-        """Обновлённый метод инициализации данных графика с автомасштабированием"""
-        import numpy as np
-        
-        if not price_data:
-            self.logger.warning("[GRAPH] Получены пустые данные цены, график не будет обновлён.")
-            return False
+    def set_full_data(self, prices, ema_values, buy_orders, sell_orders, order_history, price_distribution, timestamps=None, execution_map=None):
+        """Установка полных данных для графика"""
+        try:
+            self.prices = prices
+            self.ema_values = ema_values
+            self.buy_orders = buy_orders
+            self.sell_orders = sell_orders
+            
+            # Ограничиваем историю ордеров видимым диапазоном
+            visible_range = getattr(self, 'visible_range', 1000)
+            visible_order_history = order_history[-visible_range:] if order_history else []
+            self.full_order_history = visible_order_history
+            
+            self.price_distribution = price_distribution
+            self.timestamps = timestamps
+            self.execution_map = execution_map  # сохраняем мапу для отрисовки сделок
 
-        # Сохраняем исходные данные
-        self.full_price_data = price_data
-        self.full_ema_data = ema_data
-        self.full_buy_orders = buy_orders
-        self.full_sell_orders = sell_orders
-        self.full_order_history = order_history
-        
-        # Обрабатываем временные метки
-        if timestamps:
-            self.timestamps = self.process_timestamps(timestamps, len(price_data))
-        else:
-            self.timestamps = None
-        
-        self.distribution_data = distribution_data
-        
-        # Фильтрация NaN из EMA данных
-        valid_indices = []
-        valid_ema = []
-        
-        for i, ema_val in enumerate(ema_data):
-            if not np.isnan(ema_val):
-                valid_indices.append(i)
-                valid_ema.append(ema_val)
-        
-        # Сохраняем отфильтрованные данные EMA
-        if valid_indices:
-            self.filtered_ema_indices = valid_indices
-            self.filtered_ema_values = valid_ema
-            self.logger.debug(f"[EMA] Отфильтровано {len(valid_ema)} валидных значений EMA из {len(ema_data)}")
-        else:
-            self.filtered_ema_indices = []
-            self.filtered_ema_values = []
-            self.logger.warning("[EMA] Все значения EMA являются NaN")
-        
-        # Устанавливаем диапазон скроллбара
-        visible_range = min(self.visible_range, len(price_data))
-        max_offset = max(0, len(price_data) - visible_range)
-        self.scroll_bar.setMaximum(max_offset)
-        self.scroll_bar.setValue(max_offset)  # Устанавливаем на конец данных
-        
-        # Принудительно запускаем масштабирование по оси Y
-        self.auto_scale_view()
-        
-        # Обновляем график и распределение
-        self.update_visible_range(max_offset)
-        self.update_distribution_chart()
-        
-        return True
+            # Обновляем все графики
+            self.update_plot_data()
+            
+            # Всегда показывать правый край графика
+            self.scroll_bar.setValue(self.scroll_bar.maximum())
+            
+        except Exception as e:
+            logger = logging.getLogger("grid_visualizer")
+            logger.error(f"[GRAPH] Ошибка в set_full_data: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def update_hedge_info(self, active_options, current_price):
         """
@@ -577,7 +637,7 @@ class MarketGraph(QtWidgets.QWidget):
                         # Конвертируем в timestamp
                         numeric_timestamps.append(datetime.datetime.timestamp(parsed))
                     else:
-                        # Если не удалось распарсить, используем порядковый номер
+                        # if не удалось распарсить, используем порядковый номер
                         numeric_timestamps.append(len(numeric_timestamps))
                 
                 # Убеждаемся, что количество меток соответствует длине данных
@@ -593,7 +653,7 @@ class MarketGraph(QtWidgets.QWidget):
                     
                 return numeric_timestamps
             else:
-                # Если метки уже числовые, просто корректируем длину
+                # if метки уже числовые, просто корректируем длину
                 if len(timestamps) < data_length:
                     # Дополняем недостающие метки
                     return timestamps + list(range(
@@ -645,5 +705,79 @@ class MarketGraph(QtWidgets.QWidget):
         return True
 
     def show_continue_dialog(self):
-        """Показывает диалог для подтверждения продолжения итерации"""
-        return messagebox.askyesno("Подтверждение", "Продолжить итерацию?")
+        """Показывает диалог подтверждения для продолжения итерации"""
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Подтверждение",
+            "Продолжить итерацию?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+        return reply == QtWidgets.QMessageBox.Yes
+
+    def update_plot_data(self):
+        """Обновление данных графика"""
+        try:
+            # Обновляем основной график цены
+            if hasattr(self, 'prices') and self.prices:
+                self.full_price_data = self.prices
+                self.update_graph(self.prices)
+
+            # Обновляем EMA
+            if hasattr(self, 'ema_values') and self.ema_values:
+                self.full_ema_data = self.ema_values
+                self.update_ema(self.ema_values)
+
+            # Обновляем ордера
+            if hasattr(self, 'buy_orders'):
+                self.full_buy_orders = self.buy_orders
+            if hasattr(self, 'sell_orders'):
+                self.full_sell_orders = self.sell_orders
+
+            # Обновляем историю ордеров
+            if hasattr(self, 'full_order_history'):
+                self.update_order_history(self.full_order_history)
+
+            # Обновляем распределение цен
+            if hasattr(self, 'price_distribution') and self.price_distribution:
+                self.distribution_data = self.price_distribution
+                self.update_distribution_chart()
+
+            # Автоматически масштабируем вид
+            self.auto_scale_view()
+
+        except Exception as e:
+            logger = logging.getLogger("grid_visualizer")
+            logger.error(f"[GRAPH] Ошибка в update_plot_data: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def toggle_auto_scroll(self):
+        """Переключает режим автопрокрутки"""
+        self.auto_scroll = self.scroll_lock_button.isChecked()
+        self.scroll_lock_button.setText("🔒 Auto-scroll ON" if self.auto_scroll else "🔓 Auto-scroll OFF")
+        if self.auto_scroll:
+            # Если включаем автопрокрутку, сразу прокручиваем к последним данным
+            self.scroll_bar.setValue(self.scroll_bar.maximum())
+
+    def mouse_wheel_event(self, ev):
+        """Обработчик события колеса мыши"""
+        self.handle_mouse_wheel(ev)
+        ev.accept()  # блокируем стандартный zoom
+
+    def handle_mouse_wheel(self, ev):
+        """Обработка прокрутки для изменения масштаба"""
+        try:
+            delta = ev.delta() if hasattr(ev, 'delta') else ev.angleDelta().y()
+            # Прокрутка вверх — уменьшить visible_range, вниз — увеличить
+            step = -int(delta / 120) * 50  # каждый шаг мыши на 50 точек
+            new_range = max(50, min(1000, self.visible_range + step))
+            if new_range != self.visible_range:
+                self.visible_range = new_range
+                self.update_visible_range()
+                self.logger.debug(f"[ZOOM] Новый visible_range: {self.visible_range}")
+        except Exception as e:
+            self.logger.error(f"[ZOOM] Ошибка при масштабировании: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
+
