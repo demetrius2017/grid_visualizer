@@ -59,10 +59,15 @@ class Position:
             
             logger = logging.getLogger("grid_visualizer")
             logger.info(f"[POSITION] Position closed: {self.order_type}, volume={self.volume:.8f}, profit={self.profit:.8f}, released margin={released_margin:.8f}")
+            logger.info(f"[POSITION] Entry price: {self.entry_price:.8f}, Exit price: {exit_price:.8f}, Volume: {self.volume:.8f}")
+            logger.info(f"[POSITION] Commission: {total_commission:.8f} (Entry: {self.commission:.8f}, Exit: {exit_commission:.8f})")
             
             # Возвращаем освобожденную маржу для обработки в вызывающем коде
             return self.profit, released_margin
-        return 0, 0
+        else:
+            logger = logging.getLogger("grid_visualizer")
+            logger.warning(f"[POSITION] Attempt to close already closed position: type={self.order_type}, entry={self.entry_price:.8f}, vol={self.volume:.8f}")
+            return 0, 0
 
 
 class Order:
@@ -348,6 +353,9 @@ class OrderManager:
         estimated_commission = price * volume * MAKER_COMMISSION_RATE
         total_required = required_margin + estimated_commission
 
+        logger = logging.getLogger("grid_visualizer")
+        logger.info(f"[MARGIN_DEBUG] Перед размещением ордера {order_type}: свободная маржа={self.free_margin:.8f}, требуется={total_required:.8f}")
+
         # Проверяем, есть ли свободная маржа
         if self.free_margin <= 0:
             print(f"ERROR: Free margin is negative ({self.free_margin:.8f}). Cannot place order.")
@@ -373,7 +381,9 @@ class OrderManager:
         if price > 0 and self.free_margin >= total_required:
             order = Order(order_type, price, volume, MAKER_COMMISSION_RATE)
             self.orders.append(order)
+            old_free_margin = self.free_margin
             self.free_margin -= total_required
+            logger.info(f"[MARGIN_DEBUG] После размещения ордера {order_type}: изменение маржи={-total_required:.8f}, новая свободная маржа={self.free_margin:.8f}")
             print(f"Order placed successfully. Remaining margin: {self.free_margin:.8f}")
             return True
         else:
@@ -535,9 +545,18 @@ class OrderManager:
         lower_bound, upper_bound = self.current_grid_bounds
         grid_step = self.calculate_dynamic_grid_step("sell" if executed_order.order_type == "buy" else "buy")
         volume = executed_order.volume
-
+        
+        # Определяем уровень сетки для исполненного ордера
+        if self.current_ema:
+            if executed_order.order_type == "buy":
+                grid_level = round((self.current_ema - executed_order.price) / (self.current_ema * (self.grid_step_percent / 100)))
+            else:
+                grid_level = round((executed_order.price - self.current_ema) / (self.current_ema * (self.grid_step_percent / 100)))
+        else:
+            grid_level = 1
+        
         logger = logging.getLogger("grid_visualizer")
-        logger.info(f"[GRID_MATH] Creating counter order for {executed_order.order_type} order, volume={volume:.8f}, price={execution_price:.8f}")
+        logger.info(f"[GRID_MATH] Creating counter order for {executed_order.order_type} order, volume={volume:.8f}, price={execution_price:.8f}, level={grid_level}")
         
         # Текущий оставшийся объем для закрытия
         remaining_volume = volume
@@ -554,109 +573,152 @@ class OrderManager:
         logger.info(f"[GRID_MATH] Before closing - Buy positions: {len(open_buy_pos)}, Sell positions: {len(open_sell_pos)}")
         logger.info(f"[GRID_MATH] Matching positions to close: {len(matching_positions)}, needed volume: {volume:.8f}")
         
-        # Если нет позиций для закрытия - это аномалия, логируем подробно
-        if not matching_positions:
-            logger.warning(f"[GRID_MATH] No matching positions to close for {executed_order.order_type} order!")
-            # Подробный вывод всех открытых позиций
-            for p in self.positions:
-                if not p.closed:
-                    logger.warning(f"[GRID_MATH] Open position: type={p.order_type}, price={p.entry_price:.8f}, vol={p.volume:.8f}")
-        
-        # Сортируем позиции по цене для оптимального закрытия
-        if executed_order.order_type == "buy":  # Если исполнился ордер на покупку, закрываем sell позиции
-            matching_positions.sort(key=lambda p: p.entry_price)  # Сначала закрываем с наименьшей ценой (больше профит)
-        else:  # Если исполнился ордер на продажу, закрываем buy позиции
-            matching_positions.sort(key=lambda p: p.entry_price, reverse=True)  # Сначала с наибольшей ценой
+        # Если есть позиции для закрытия
+        if matching_positions:
+            # Вычисляем расстояние от каждой позиции до EMA для определения их уровня
+            for position in matching_positions:
+                if self.current_ema:
+                    if position.order_type == "buy":
+                        position.grid_level = round((self.current_ema - position.entry_price) / (self.current_ema * (self.grid_step_percent / 100)))
+                    else:
+                        position.grid_level = round((position.entry_price - self.current_ema) / (self.current_ema * (self.grid_step_percent / 100)))
+                else:
+                    position.grid_level = 1
             
-        # Закрываем позиции, пока не израсходуем весь объем
-        positions_to_remove = []  # Список позиций для удаления
-        for position in matching_positions:
-            if remaining_volume <= 0.000001:  # Небольшой порог для компенсации погрешностей
-                break  # Если объем израсходован, выходим из цикла
-                
-            # Определяем объем для закрытия в этой позиции
-            close_volume = min(position.volume, remaining_volume)
-            position_ratio = close_volume / position.volume
+            # Сортируем позиции по близости уровня к уровню исполненного ордера
+            matching_positions.sort(key=lambda p: abs(getattr(p, 'grid_level', 1) - grid_level))
             
-            logger.info(f"[POSITION] Closing position: {position.order_type}, entry={position.entry_price:.8f}, "
-                        f"volume={position.volume:.8f}, close_volume={close_volume:.8f}, ratio={position_ratio:.8f}")
+            # Закрываем позиции, пока не израсходуем весь объем
+            positions_to_remove = []
             
-            if position_ratio >= 0.999:  # Если закрываем практически всю позицию
-                # Закрываем полностью
-                profit, released_margin = position.close_position(execution_price)
-                total_profit += profit
-                total_released_margin += released_margin
+            for position in matching_positions:
+                if remaining_volume <= 0.000001:
+                    break
+                    
+                close_volume = min(position.volume, remaining_volume)
+                position_ratio = close_volume / position.volume
+                position_level = getattr(position, 'grid_level', 1)
                 
-                # Добавляем в список для удаления после завершения цикла
-                positions_to_remove.append(position)
-                self.closed_positions.append(position)
+                logger.info(f"[POSITION] Closing position: {position.order_type}, entry={position.entry_price:.8f}, "
+                            f"volume={position.volume:.8f}, close_volume={close_volume:.8f}, level={position_level}")
                 
-                logger.info(f"[POSITION] Fully closed position, profit={profit:.8f}, released_margin={released_margin:.8f}")
+                if position_ratio >= 0.999:
+                    # Закрываем полностью
+                    profit, released_margin = position.close_position(execution_price)
+                    total_profit += profit
+                    total_released_margin += released_margin
+                    
+                    positions_to_remove.append(position)
+                    self.closed_positions.append(position)
+                    
+                    logger.info(f"[POSITION] Fully closed position at level {position_level}, profit={profit:.8f}, released_margin={released_margin:.8f}")
+                else:
+                    # Частичное закрытие
+                    new_volume = position.volume - close_volume
+                    
+                    # Пропорционально вычисляем маржу и комиссию для закрываемой части
+                    closed_margin = position.margin * position_ratio
+                    closed_commission = position.commission * position_ratio
+                    
+                    # Рассчитываем прибыль для закрываемой части
+                    if position.order_type == "buy":
+                        profit = (execution_price - position.entry_price) * close_volume - closed_commission
+                    else:
+                        profit = (position.entry_price - execution_price) * close_volume - closed_commission
+                    
+                    # Обновляем текущую позицию
+                    position.volume = new_volume
+                    position.margin = position.margin - closed_margin  # Явно уменьшаем маржу
+                    position.commission = position.commission - closed_commission
+                    
+                    # Обновляем общую прибыль и маржу
+                    total_profit += profit
+                    total_released_margin += closed_margin
+                    
+                    # Создаем запись о закрытой части позиции
+                    closed_position = Position(position.order_type, position.entry_price, close_volume, True)
+                    closed_position.exit_price = execution_price
+                    closed_position.closed = True
+                    closed_position.profit = profit
+                    self.closed_positions.append(closed_position)
+                    
+                    logger.info(f"[POSITION] Partially closed position at level {position_level}: "
+                               f"closed_volume={close_volume:.8f}, remaining={new_volume:.8f}, profit={profit:.8f}")
+                
+                # Уменьшаем оставшийся объем для закрытия
+                remaining_volume -= close_volume
+            
+            # Удаляем полностью закрытые позиции из списка
+            for position in positions_to_remove:
+                if position in self.positions:
+                    self.positions.remove(position)
+            
+            # Обновляем баланс и общую прибыль
+            self.balance += total_profit
+            self.total_profit += total_profit
+            self.free_margin += total_released_margin
+            
+            logger.info(f"[COUNTER] Total profit from closing: {total_profit:.8f}, released margin: {total_released_margin:.8f}, "
+                       f"remaining volume: {remaining_volume:.8f}")
+        else:
+            logger.info(f"[GRID_MATH] No matching positions to close for {executed_order.order_type} order at level {grid_level}")
+            
+        # Проверяем, нужно ли создавать встречный ордер для оставшегося объема
+        if remaining_volume > 0.000001:
+            # ВАЖНО: Проверяем, есть ли уже такой ордер в сетке, чтобы избежать дублирования
+            existing_counter_orders = []
+            counter_type = "sell" if executed_order.order_type == "buy" else "buy"
+            
+            if self.current_ema:
+                if counter_type == "sell":
+                    counter_price = self.current_ema * (1 + grid_step * grid_level / 100)
+                else:
+                    counter_price = self.current_ema * (1 - grid_step * grid_level / 100)
             else:
-                # Частичное закрытие - создаем новую позицию с оставшимся объемом
-                new_volume = position.volume - close_volume
+                if counter_type == "sell":
+                    counter_price = execution_price * (1 + grid_step / 100)
+                else:
+                    counter_price = execution_price * (1 - grid_step / 100)
+            
+            # Проверяем наличие похожих ордеров в сетке
+            active_orders = [order for order in self.orders if not order.executed and order.order_type == counter_type]
+            for order in active_orders:
+                price_diff = abs(order.price - counter_price) / counter_price
+                if price_diff < 0.001:  # Если разница меньше 0.1%
+                    existing_counter_orders.append(order)
+            
+            if existing_counter_orders:
+                # Добавляем объем к существующему ордеру вместо создания нового
+                target_order = existing_counter_orders[0]
+                old_volume = target_order.volume
+                old_price = target_order.price
                 
-                # Пропорционально вычисляем маржу и комиссию для закрываемой части
-                closed_margin = position.margin * position_ratio
-                closed_commission = position.commission * position_ratio
+                # Вычисляем новую средневзвешенную цену
+                new_volume = old_volume + remaining_volume
+                new_price = (old_price * old_volume + counter_price * remaining_volume) / new_volume
                 
-                # Рассчитываем прибыль для закрываемой части
-                if position.order_type == "buy":
-                    profit = (execution_price - position.entry_price) * close_volume - closed_commission
-                else:  # sell
-                    profit = (position.entry_price - execution_price) * close_volume - closed_commission
+                # Освобождаем маржу от старого ордера
+                self.free_margin += old_price * old_volume * (1 + MAKER_COMMISSION_RATE)
                 
-                # Обновляем текущую позицию
-                position.volume = new_volume
-                position.margin = position.margin - closed_margin  # Явно уменьшаем маржу
-                position.commission = position.commission - closed_commission
+                # Обновляем ордер
+                target_order.price = new_price
+                target_order.volume = new_volume
+                target_order.commission = new_price * new_volume * MAKER_COMMISSION_RATE
                 
-                # Обновляем общую прибыль и маржу
-                total_profit += profit
-                total_released_margin += closed_margin
+                # Резервируем маржу для обновленного ордера
+                required_margin = new_price * new_volume * (1 + MAKER_COMMISSION_RATE)
+                self.free_margin -= required_margin
                 
-                # Создаем запись о закрытой части позиции
-                closed_position = Position(position.order_type, position.entry_price, close_volume, True)
-                closed_position.exit_price = execution_price
-                closed_position.closed = True
-                closed_position.profit = profit
-                self.closed_positions.append(closed_position)
-                
-                logger.info(f"[POSITION] Partially closed: closed_volume={close_volume:.8f}, remaining={new_volume:.8f}, "
-                           f"profit={profit:.8f}, released_margin={closed_margin:.8f}")
-                
-            # Уменьшаем оставшийся объем для закрытия
-            remaining_volume -= close_volume
-        
-        # Удаляем полностью закрытые позиции из списка
-        for position in positions_to_remove:
-            if position in self.positions:
-                self.positions.remove(position)
-        
-        # Обновляем баланс и общую прибыль
-        self.balance += total_profit
-        self.total_profit += total_profit
-        self.free_margin += total_released_margin
-        
-        logger.info(f"[COUNTER] Total profit from closing: {total_profit:.8f}, released margin: {total_released_margin:.8f}, "
-                   f"remaining volume: {remaining_volume:.8f}")
-        
-        # Пересчитываем свободную маржу после закрытия позиций
-        self.calculate_free_margin()
-        
-        # Если есть оставшийся объем, размещаем новый контр-ордер
-        if remaining_volume > 0.000001:  # Порог для компенсации погрешностей
-            if executed_order.order_type == "buy":
-                new_price = execution_price * (1 + grid_step / 100)
-                if new_price <= upper_bound and new_price > self.current_ema and new_price > self.current_price:
-                    self.place_order("sell", new_price, remaining_volume)
-                    logger.info(f"[COUNTER] Placed sell counter order at {new_price:.8f}, volume={remaining_volume:.8f}")
+                logger.info(f"[COUNTER] Updated existing {counter_type} order: from vol={old_volume:.8f} to vol={new_volume:.8f}, price={new_price:.8f}")
             else:
-                new_price = execution_price * (1 - grid_step / 100)
-                if new_price >= lower_bound and new_price < self.current_ema and new_price < self.current_price:
-                    self.place_order("buy", new_price, remaining_volume)
-                    logger.info(f"[COUNTER] Placed buy counter order at {new_price:.8f}, volume={remaining_volume:.8f}")
-                
+                # Если нет похожих ордеров, создаем новый
+                if counter_type == "buy" and counter_price >= lower_bound and counter_price <= self.current_price:
+                    logger.info(f"[COUNTER] Placing {counter_type} counter order at level {grid_level}, price={counter_price:.8f}")
+                    self.place_order(counter_type, counter_price, remaining_volume)
+                elif counter_type == "sell" and counter_price <= upper_bound and counter_price >= self.current_price:
+                    logger.info(f"[COUNTER] Placing {counter_type} counter order at level {grid_level}, price={counter_price:.8f}")
+                    self.place_order(counter_type, counter_price, remaining_volume)
+        
         # Обновляем плавающую прибыль
         self.calculate_floating_profit(self.current_price)
 
@@ -754,23 +816,61 @@ class OrderManager:
         return executed_any
 
     def execute_order(self, order, price, timestamp):
-        """Исполняет ордер с сохранением временной метки"""
+        """Исполняет ордер с сохранением временной метки и уровня сетки"""
         try:
             if not order.executed:
                 order.execution_price = price
                 order.execution_time = timestamp
                 order.executed = True
                 
-                # Создаем новую позицию
+                # Рассчитываем уровень сетки для ордера относительно EMA
+                grid_level = self.calculate_grid_level(order.order_type, order.price)
+                
+                # Проверка на дублирующие позиции
+                existing_positions = [p for p in self.positions 
+                                     if p.order_type == order.order_type and 
+                                        abs(p.entry_price - order.price) < 0.00001 and
+                                        not p.closed]
+                
+                if existing_positions:
+                    logger = logging.getLogger("grid_visualizer")
+                    logger.warning(f"[ORDER] Потенциально дублирующиеся позиции для ордера {order.id}, {len(existing_positions)} существующих")
+                    for pos in existing_positions:
+                        logger.warning(f"[ORDER] Существующая позиция: type={pos.order_type}, price={pos.entry_price:.8f}, vol={pos.volume:.8f}")
+                
+                # Логирование объемов перед добавлением новой позиции
+                logger = logging.getLogger("grid_visualizer")
+                open_buy_pos = [p for p in self.positions if p.order_type == "buy" and not p.closed]
+                open_sell_pos = [p for p in self.positions if p.order_type == "sell" and not p.closed]
+                buy_volume_total = sum(p.volume for p in open_buy_pos)
+                sell_volume_total = sum(p.volume for p in open_sell_pos)
+                logger.info(f"[VOLUME] Before new position - Buy: {buy_volume_total:.8f}, Sell: {sell_volume_total:.8f}, Diff: {buy_volume_total - sell_volume_total:.8f}")
+                
+                # Создаем новую позицию и добавляем к ней информацию об уровне сетки
                 position = Position(order.order_type, order.price, order.volume, order.is_maker)
+                position.grid_level = grid_level  # Сохраняем уровень сетки для позиции
                 self.positions.append(position)
                 
-                # Обновляем баланс and комиссию
+                # Подробно логируем информацию о новой позиции
+                logger.info(f"[MARGIN] Position created: {position.order_type}, entry={position.entry_price:.8f}, volume={position.volume:.8f}, margin={position.margin:.8f}, level={grid_level}")
+                
+                # Обновляем баланс и комиссию
                 self.balance -= order.commission
                 self.total_commission += order.commission
+                logger.info(f"[BALANCE] Deducted commission: {order.commission:.8f}, New balance: {self.balance:.8f}")
                 
                 # Добавляем в историю исполненных ордеров
                 self.order_history.append(order)
+                
+                # Логируем исполнение
+                logger.info(
+                    f"[ORDER] Executed {order.order_type} order at {price:.8f}, "
+                    f"time={timestamp}, commission={order.commission:.8f}, level={grid_level}"
+                )
+                
+                # Сохраняем значение свободной маржи до размещения встречного ордера
+                margin_before = self.free_margin
+                logger.info(f"[MARGIN] Before counter order - Free margin: {margin_before:.8f}")
                 
                 # Размещаем встречный ордер
                 self.place_counter_order(order, price)
@@ -778,12 +878,29 @@ class OrderManager:
                 # Обновляем свободную маржу
                 self.calculate_free_margin()
                 
-                # Логируем исполнение
-                logger = logging.getLogger("grid_visualizer")
-                logger.info(
-                    f"[ORDER] Executed {order.order_type} order at {price:.8f}, "
-                    f"time={timestamp}, commission={order.commission:.8f}"
-                )
+                # Логируем изменение маржи после всех операций
+                margin_after = self.free_margin
+                logger.info(f"[MARGIN] After all operations - Free margin: {margin_after:.8f}, Diff: {margin_after - margin_before:.8f}")
+                
+                # Проверяем состояние позиций после всех операций
+                open_buy_pos_after = [p for p in self.positions if p.order_type == "buy" and not p.closed]
+                open_sell_pos_after = [p for p in self.positions if p.order_type == "sell" and not p.closed]
+                buy_volume_after = sum(p.volume for p in open_buy_pos_after)
+                sell_volume_after = sum(p.volume for p in open_sell_pos_after)
+                logger.info(f"[VOLUME] After all operations - Buy: {buy_volume_after:.8f}, Sell: {sell_volume_after:.8f}, Diff: {buy_volume_after - sell_volume_after:.8f}")
+                
+                # Добавим аудит уровней сетки для открытых позиций
+                level_counts = {}
+                for pos in self.positions:
+                    if not pos.closed:
+                        pos_level = getattr(pos, "grid_level", 0)
+                        if pos_level not in level_counts:
+                            level_counts[pos_level] = {"buy": 0, "sell": 0}
+                        level_counts[pos_level][pos.order_type] += 1
+                
+                # Логируем распределение позиций по уровням
+                logger.info(f"[GRID_AUDIT] Open positions by levels: {level_counts}")
+                
                 return True
                 
         except Exception as e:
@@ -1091,15 +1208,36 @@ class OrderManager:
         """
         # Важно: плавающая прибыль НЕ увеличивает свободную маржу, чтобы избежать каскадной ликвидации!
         
+        logger = logging.getLogger("grid_visualizer")
+        
+        previous_free_margin = self.free_margin if hasattr(self, 'free_margin') else self.initial_balance
+        
         # Маржа используемая открытыми позициями
-        margin_used_positions = sum(pos.margin for pos in self.positions if not pos.closed)
+        margin_used_positions = 0
+        
+        # Подробно логируем каждую открытую позицию для анализа
+        logger.debug(f"[MARGIN] Подробный расчет маржи по позициям:")
+        for pos in self.positions:
+            if not pos.closed:
+                logger.debug(f"[MARGIN] Позиция {pos.order_type}, цена={pos.entry_price:.8f}, объем={pos.volume:.8f}, маржа={pos.margin:.8f}")
+                if pos.margin < 0:
+                    logger.warning(f"[MARGIN] Обнаружена отрицательная маржа: {pos.margin:.8f} в позиции {pos.order_type}")
+                margin_used_positions += pos.margin
         
         # Маржа зарезервированная под открытые ордера
-        margin_used_orders = sum(
-            order.price * order.volume  
-            for order in self.orders 
-            if not order.executed
-        )
+        margin_used_orders = 0
+        
+        # Подробно логируем каждый открытый ордер
+        logger.debug(f"[MARGIN] Подробный расчет маржи по ордерам:")
+        order_count = 0
+        for order in self.orders:
+            if not order.executed:
+                order_margin = order.price * order.volume
+                logger.debug(f"[MARGIN] Ордер {order.id}, тип={order.order_type}, цена={order.price:.8f}, объем={order.volume:.8f}, маржа={order_margin:.8f}")
+                margin_used_orders += order_margin
+                order_count += 1
+        
+        logger.debug(f"[MARGIN] Общее количество открытых ордеров: {order_count}")
         
         # Комиссия за открытые ордера
         commission_orders = sum(
@@ -1108,16 +1246,48 @@ class OrderManager:
             if not order.executed
         )
         
-        # Обновляем свободную маржу - без учета плавающей прибыли для безопасности
-        self.free_margin = self.balance - margin_used_positions - margin_used_orders - commission_orders
+        # Проверяем корректность баланса
+        if self.balance < 0:
+            logger.warning(f"[MARGIN] Обнаружен отрицательный баланс: {self.balance:.8f}")
         
-        # Логируем детальную информацию о марже для отладки
-        logger = logging.getLogger("grid_visualizer")
+        # Рассчитываем свободную маржу
+        free_margin_calculated = self.balance - margin_used_positions - margin_used_orders - commission_orders
+        
+        # Проверяем, не изменилась ли свободная маржа значительно
+        if abs(free_margin_calculated - previous_free_margin) > 0.01 * self.initial_balance:
+            logger.warning(f"[MARGIN_CHANGE] Значительное изменение свободной маржи: с {previous_free_margin:.8f} до {free_margin_calculated:.8f}")
+            logger.warning(f"[MARGIN_CHANGE] Разница: {free_margin_calculated - previous_free_margin:.8f}")
+            logger.warning(f"[MARGIN_CHANGE] Причины изменения - Позиции: {margin_used_positions:.8f}, Ордера: {margin_used_orders:.8f}, Комиссии: {commission_orders:.8f}")
+        
+        # Обновляем свободную маржу
+        self.free_margin = free_margin_calculated
+        
+        # Проверяем корректность свободной маржи
+        if self.free_margin < 0:
+            logger.warning(f"[MARGIN] Критически низкая свободная маржа: {self.free_margin:.8f}")
+        elif self.free_margin < 0.1 * self.initial_balance:
+            logger.warning(f"[MARGIN] Потенциально опасно низкая свободная маржа: {self.free_margin:.8f} (менее 10% от начальной)")
+        
+        # Подробная информация о балансе и марже
         logger.debug(f"[MARGIN] Balance: {self.balance:.8f}, "
                     f"Used by positions: {margin_used_positions:.8f}, "
                     f"Used by orders: {margin_used_orders:.8f}, "
                     f"Commission: {commission_orders:.8f}, "
                     f"Free margin: {self.free_margin:.8f}")
+        
+        # Вычисляем маржинальность как отношение свободной маржи к начальному балансу
+        margin_ratio = self.free_margin / self.initial_balance if self.initial_balance > 0 else 0
+        logger.debug(f"[MARGIN_RATIO] Текущая маржинальность: {margin_ratio:.2%} от начального баланса")
+        
+        # Проверяем согласованность объемов открытых позиций
+        open_buy_pos = [p for p in self.positions if p.order_type == "buy" and not p.closed]
+        open_sell_pos = [p for p in self.positions if p.order_type == "sell" and not p.closed]
+        buy_volume = sum(p.volume for p in open_buy_pos)
+        sell_volume = sum(p.volume for p in open_sell_pos)
+        volume_diff = buy_volume - sell_volume
+        
+        if abs(volume_diff) > 0.1:  # Если разница в объемах превышает 0.1
+            logger.warning(f"[GRID_MATH] Несбалансированность объемов позиций! Buy: {buy_volume:.8f}, Sell: {sell_volume:.8f}, Diff: {volume_diff:.8f}")
         
         return self.free_margin
 
@@ -1186,3 +1356,29 @@ class OrderManager:
             self.place_order("buy", price, volume)
         for price in sell_prices:
             self.place_order("sell", price, volume)
+
+    def calculate_grid_level(self, order_type, price):
+        """
+        Рассчитывает уровень сетки для заданной цены относительно EMA.
+        Уровень показывает, сколько шагов от EMA находится цена.
+        
+        :param order_type: "buy" или "sell"
+        :param price: цена для определения уровня
+        :return: целое число, уровень сетки (1, 2, 3, ...)
+        """
+        if not self.current_ema:
+            return 1  # если нет EMA, используем дефолтный уровень
+            
+        if order_type == "buy":
+            # Для buy-ордеров: ниже EMA, чем ниже цена, тем больше уровень
+            distance = (self.current_ema - price) / self.current_ema
+            level = max(1, round(distance / (self.grid_step_percent / 100)))
+        else:  # sell
+            # Для sell-ордеров: выше EMA, чем выше цена, тем больше уровень
+            distance = (price - self.current_ema) / self.current_ema
+            level = max(1, round(distance / (self.grid_step_percent / 100)))
+            
+        logger = logging.getLogger("grid_visualizer")
+        logger.debug(f"[GRID_LEVEL] {order_type} price={price:.4f}, ema={self.current_ema:.4f}, level={level}")
+        
+        return level
