@@ -495,14 +495,52 @@ class TradingSimulator:
         }
         
         # Получаем информацию о шаге сетки
-        buy_step = self.order_manager.calculate_dynamic_grid_step('buy')
-        sell_step = self.order_manager.calculate_dynamic_grid_step('sell')
-        grid_steps = {
-            'base_step': self.order_manager.base_grid_step,
-            'buy_step': buy_step,
-            'sell_step': sell_step,
-            'min_step': self.order_manager.min_grid_step
-        }
+        try:
+            # Получаем итоговые и рассчитанные шаги сетки
+            buy_step = self.order_manager.calculate_dynamic_grid_step('buy')
+            sell_step = self.order_manager.calculate_dynamic_grid_step('sell')
+            
+            # Получаем рассчитанный шаг сетки (до применения минимального ограничения)
+            buy_calculated = self.order_manager.base_grid_step * (self.order_manager.buy_trade_speed / self.order_manager.base_trade_speed)
+            if self.order_manager.buy_trade_speed <= 0.000001:
+                buy_calculated = self.order_manager.base_grid_step * min(2 ** self.order_manager.consecutive_buys, self.order_manager.max_grid_step_multiplier)
+            buy_calculated = max(buy_calculated, 0.01)  # Минимум 0.01% для отображения
+            
+            sell_calculated = self.order_manager.base_grid_step * (self.order_manager.sell_trade_speed / self.order_manager.base_trade_speed)
+            if self.order_manager.sell_trade_speed <= 0.000001:
+                sell_calculated = self.order_manager.base_grid_step * min(2 ** self.order_manager.consecutive_sells, self.order_manager.max_grid_step_multiplier)
+            sell_calculated = max(sell_calculated, 0.01)  # Минимум 0.01% для отображения
+            
+            # Если скорость ниже базовой, уменьшаем не более чем в 2 раза
+            if buy_calculated < self.order_manager.base_grid_step / 2:
+                buy_calculated = self.order_manager.base_grid_step / 2
+                
+            if sell_calculated < self.order_manager.base_grid_step / 2:
+                sell_calculated = self.order_manager.base_grid_step / 2
+            
+            # Ограничиваем максимальным множителем
+            buy_calculated = min(buy_calculated, self.order_manager.base_grid_step * self.order_manager.max_grid_step_multiplier)
+            sell_calculated = min(sell_calculated, self.order_manager.base_grid_step * self.order_manager.max_grid_step_multiplier)
+            
+            grid_steps = {
+                'base_step': self.order_manager.base_grid_step,
+                'buy_step': buy_step,
+                'sell_step': sell_step,
+                'min_step': self.order_manager.min_grid_step,
+                'buy_calculated_step': buy_calculated,
+                'sell_calculated_step': sell_calculated
+            }
+        except Exception as e:
+            print(f"Ошибка при получении информации о шаге сетки: {str(e)}")
+            # Значения по умолчанию в случае ошибки
+            grid_steps = {
+                'base_step': 0.5,
+                'buy_step': 1.4,
+                'sell_step': 1.4,
+                'min_step': 1.4,
+                'buy_calculated_step': 0.5,
+                'sell_calculated_step': 0.5
+            }
         
         # Обновляем окно позиций с передачей всех необходимых параметров
         self.positions_window.update_positions(

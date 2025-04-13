@@ -188,8 +188,16 @@ class TradeSpeedCalculator:
                 multiplier = min(2 ** self.consecutive_sells, self.max_grid_step_multiplier)
                 self.logger.info(f"[GRID_STEP] SELL шаг на основе последовательности ({self.consecutive_sells}): x{multiplier:.2f}")
             
-            grid_step = max(self.base_grid_step * multiplier, self.min_grid_step)
-            self.logger.info(f"[GRID_STEP] {order_type} шаг: {grid_step:.4f}% (базовый: {self.base_grid_step:.4f}%)")
+            # Рассчитываем новый шаг и гарантируем, что он не ниже минимального
+            calculated_step = self.base_grid_step * multiplier
+            grid_step = max(calculated_step, self.min_grid_step)
+            
+            # Логируем подробную информацию о расчете
+            if grid_step == self.min_grid_step and calculated_step < self.min_grid_step:
+                self.logger.info(f"[GRID_STEP] {order_type} шаг ограничен минимальным: {grid_step:.4f}% (рассчитано: {calculated_step:.4f}%)")
+            else:
+                self.logger.info(f"[GRID_STEP] {order_type} шаг: {grid_step:.4f}% (базовый: {self.base_grid_step:.4f}%)")
+            
             return grid_step
         
         # Вычисляем коэффициент изменения шага на основе отношения текущей скорости к базовой
@@ -209,11 +217,17 @@ class TradeSpeedCalculator:
             multiplier = max(speed_ratio, 0.5)
             self.logger.info(f"[GRID_STEP] {order_type} УМЕНЬШЕНИЕ шага из-за низкой скорости: x{multiplier:.2f}")
         
-        # Рассчитываем новый шаг и гарантируем, что он не ниже минимального
-        grid_step = max(self.base_grid_step * multiplier, self.min_grid_step)
+        # Рассчитываем новый шаг на основе множителя
+        calculated_step = self.base_grid_step * multiplier
         
-        # Всегда логируем новый шаг
-        self.logger.info(f"[GRID_STEP] {order_type} ИТОГОВЫЙ шаг: {grid_step:.4f}% (базовый: {self.base_grid_step:.4f}%)")
+        # Проверяем, не ниже ли он минимального порога
+        grid_step = max(calculated_step, self.min_grid_step)
+        
+        # Подробное логирование, показывающее ограничение минимальным шагом
+        if grid_step == self.min_grid_step and calculated_step < self.min_grid_step:
+            self.logger.info(f"[GRID_STEP] {order_type} шаг ограничен минимальным: {grid_step:.4f}% (рассчитано: {calculated_step:.4f}%)")
+        else:
+            self.logger.info(f"[GRID_STEP] {order_type} ИТОГОВЫЙ шаг: {grid_step:.4f}% (рассчитано: {calculated_step:.4f}%)")
         
         return grid_step
 
@@ -257,8 +271,8 @@ class TradeSpeedCalculator:
 # Создаем калькулятор с базовыми параметрами
 calculator = TradeSpeedCalculator(
     base_grid_step_percent=0.5,      # Базовый шаг сетки 0.5%
-    maker_commission_rate=0.002,     # Комиссия мейкера 0.002 (0.2%)
-    taker_commission_rate=0.005,     # Комиссия тейкера 0.005 (0.5%)
+    maker_commission_rate=0.0002,    # Комиссия мейкера 0.0002 (0.02%)
+    taker_commission_rate=0.0005,    # Комиссия тейкера 0.0005 (0.05%)
     max_grid_step_multiplier=2.0,    # Максимальное увеличение шага в 2 раза
     base_trade_speed=0.05,           # Базовая скорость сделок
     trade_speed_window=20            # Окно для расчета средней скорости

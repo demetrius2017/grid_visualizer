@@ -7,8 +7,8 @@ from core.adaptive_grid import TradeSpeedCalculator  # Импорт класса
 
 
 # Константы для комиссий Binance
-MAKER_COMMISSION_RATE = 0.002  # 0.02%
-TAKER_COMMISSION_RATE = 0.005  # 0.05%
+MAKER_COMMISSION_RATE = 0.0002  # 0.02%
+TAKER_COMMISSION_RATE = 0.0005  # 0.05%
 MIN_VOLUME_THRESHOLD = 0.1
 
 

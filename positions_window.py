@@ -283,17 +283,43 @@ class PositionsWindow(QtWidgets.QWidget):
             sell_step = grid_steps.get('sell_step', 0.0)
             min_step = grid_steps.get('min_step', 0.0)
             
+            # Новые параметры с рассчитанными значениями (до применения минимального шага)
+            buy_calculated_step = grid_steps.get('buy_calculated_step', buy_step)
+            sell_calculated_step = grid_steps.get('sell_calculated_step', sell_step)
+            
             # Рассчитываем множители относительно базового шага
-            buy_multiplier = buy_step / base_step if base_step > 0 else 1.0
-            sell_multiplier = sell_step / base_step if base_step > 0 else 1.0
+            buy_multiplier = buy_calculated_step / base_step if base_step > 0 else 1.0
+            sell_multiplier = sell_calculated_step / base_step if base_step > 0 else 1.0
+            
+            # Показываем, если шаг ограничен минимальным
+            buy_limited = buy_step == min_step and buy_calculated_step < min_step
+            sell_limited = sell_step == min_step and sell_calculated_step < min_step
             
             # Обновляем метки
             self.base_grid_step_label.setText(f"{base_step:.4f}%")
-            self.current_buy_step_label.setText(f"{buy_step:.4f}%")
-            self.current_sell_step_label.setText(f"{sell_step:.4f}%")
+            
+            if (buy_limited):
+                self.current_buy_step_label.setText(f"{buy_step:.4f}% (мин)")
+            else:
+                self.current_buy_step_label.setText(f"{buy_step:.4f}%")
+                
+            if (sell_limited):
+                self.current_sell_step_label.setText(f"{sell_step:.4f}% (мин)")
+            else:
+                self.current_sell_step_label.setText(f"{sell_step:.4f}%")
+                
             self.min_grid_step_label.setText(f"{min_step:.4f}%")
-            self.buy_step_multiplier_label.setText(f"{buy_multiplier:.2f}x")
-            self.sell_step_multiplier_label.setText(f"{sell_multiplier:.2f}x")
+            
+            # Добавляем рассчитанные значения в скобках
+            if (buy_limited):
+                self.buy_step_multiplier_label.setText(f"{buy_multiplier:.2f}x (факт: {buy_calculated_step:.4f}%)")
+            else:
+                self.buy_step_multiplier_label.setText(f"{buy_multiplier:.2f}x")
+                
+            if (sell_limited):
+                self.sell_step_multiplier_label.setText(f"{sell_multiplier:.2f}x (факт: {sell_calculated_step:.4f}%)")
+            else:
+                self.sell_step_multiplier_label.setText(f"{sell_multiplier:.2f}x")
             
         # Обновление общей сводки с информацией о марже
         total_profit = sum(position.profit for position in closed_positions)
