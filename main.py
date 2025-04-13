@@ -5,6 +5,8 @@ import logging
 import time
 import traceback
 import argparse
+import os
+from logging.handlers import RotatingFileHandler
 from pstats import SortKey
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -19,29 +21,97 @@ last_graph_update = 0
 
 
 def setup_logging():
-    # Очищаем лог-файлы перед началом работы
-    open("app_debug.log", "w").close()
-    open("detailed_debug.log", "w").close()
+    """
+    Настраивает логирование с ротацией файлов и обработкой ошибок
+    """
+    log_dir = os.path.dirname(os.path.abspath(__file__))
+    app_log_path = os.path.join(log_dir, "app_debug.log")
+    detailed_log_path = os.path.join(log_dir, "detailed_debug.log")
 
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler("app_debug.log"), logging.StreamHandler()],
-    )
-    logger = logging.getLogger("grid_visualizer")
-    detailed_handler = logging.FileHandler("detailed_debug.log")
-    detailed_handler.setLevel(logging.DEBUG)
-    detailed_handler.setFormatter(
-        logging.Formatter("%(asctime)s - %(name)s - [%(levelname)s] - %(message)s - %(filename)s:%(lineno)d")
-    )
-    logger.addHandler(detailed_handler)
-    return logger
+    # Безопасная очистка лог-файлов перед началом работы
+    try:
+        # Проверяем наличие и доступность файлов
+        for log_file in [app_log_path, detailed_log_path]:
+            if os.path.exists(log_file):
+                try:
+                    with open(log_file, "w") as f:
+                        f.write("")  # Очищаем файл
+                except (IOError, PermissionError) as e:
+                    print(f"Предупреждение: не удалось очистить лог-файл {log_file}: {e}")
+            else:
+                # Создаем директорию, если не существует
+                os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+    except Exception as e:
+        print(f"Ошибка при подготовке лог-файлов: {e}")
+        # Продолжаем выполнение, логи будут записываться с добавлением
+
+    # Настраиваем корневой логгер
+    try:
+        # Создаем ротирующие обработчики для файлов логов
+        app_handler = RotatingFileHandler(app_log_path, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        app_handler.setLevel(logging.DEBUG)
+        app_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+
+        detailed_handler = RotatingFileHandler(
+            detailed_log_path, maxBytes=20 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        )
+        detailed_handler.setLevel(logging.DEBUG)
+        detailed_handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - [%(levelname)s] - %(message)s - %(filename)s:%(lineno)d")
+        )
+
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)  # Для консоли используем INFO уровень
+        console_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+
+        # Настраиваем корневой логгер
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+
+        # Удаляем существующие обработчики, чтобы избежать дублирования
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+
+        # Добавляем новые обработчики
+        root_logger.addHandler(app_handler)
+        root_logger.addHandler(console_handler)
+
+        # Создаем специальный логгер для приложения
+        logger = logging.getLogger("grid_visualizer")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(detailed_handler)
+
+        # Настраиваем перехват необработанных исключений
+        def log_unhandled_exception(exc_type, exc_value, exc_traceback):
+            if issubclass(exc_type, KeyboardInterrupt):
+                # Не перехватываем KeyboardInterrupt
+                sys.__excepthook__(exc_type, exc_value, exc_traceback)
+                return
+
+            logger.critical("Необработанное исключение:", exc_info=(exc_type, exc_value, exc_traceback))
+
+        sys.excepthook = log_unhandled_exception
+
+        logger.info("Логирование настроено успешно")
+        return logger
+
+    except Exception as e:
+        print(f"Критическая ошибка при настройке логирования: {e}")
+        # Аварийная настройка базового логирования
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler()]
+        )
+        logger = logging.getLogger("grid_visualizer")
+        logger.error(f"Не удалось настроить расширенное логирование: {e}")
+        return logger
+
 
 # Функция для запуска в безголовом режиме (без GUI)
 def run_headless_simulation(csv_file=None, max_positions=30, stop_after_positions=True, timeout=300, output_path=None):
     """
     Запускает симуляцию в безголовом режиме без графического интерфейса
-    
+
     :param csv_file: путь к CSV файлу с данными (если None, используется случайная генерация)
     :param max_positions: максимальное количество позиций для обработки
     :param stop_after_positions: если True, останавливается после достижения max_positions
@@ -50,13 +120,13 @@ def run_headless_simulation(csv_file=None, max_positions=30, stop_after_position
     """
     logger = setup_logging()
     logger.info("[HEADLESS] Запуск симуляции в безголовом режиме")
-    
+
     # Инициализация QApplication для работы событийного цикла
     app = QtWidgets.QApplication([])
-    
+
     # Создаем объект графика (без отображения)
     market_graph = MarketGraph()
-    
+
     # Создаем симулятор с графиком
     simulator = TradingSimulator(
         market_graph,
@@ -67,7 +137,7 @@ def run_headless_simulation(csv_file=None, max_positions=30, stop_after_position
         min_orders=5,
         max_orders=20,
     )
-    
+
     # Устанавливаем CSV файл, если он указан
     if csv_file:
         logger.info(f"[HEADLESS] Загрузка данных из файла: {csv_file}")
@@ -75,223 +145,303 @@ def run_headless_simulation(csv_file=None, max_positions=30, stop_after_position
     else:
         logger.info("[HEADLESS] Используется случайная генерация цен")
         simulator.simulation_mode = "random"
-    
+
     # Включаем создание ордеров
     simulator.order_manager.orders_enabled = True
     simulator.order_manager.active = True
     simulator.order_manager.processing_enabled = True
-    
+
     # Устанавливаем счетчик закрытых позиций
     closed_positions_count = 0
-    
+
     # Сохраняем время начала для расчета скорости обработки
     start_time = time.time()
-    
+
     # Переменные для отслеживания статистики
     max_profit = 0
     min_profit = 0
     profit_sum = 0
     position_count_by_levels = {}
     level_profits = {}
-    
+
     # Устанавливаем таймер для регулярной проверки числа закрытых позиций
     check_timer = QtCore.QTimer()
-    
+
     def check_positions():
         nonlocal closed_positions_count, max_profit, min_profit, profit_sum
         current_closed = len(simulator.order_manager.closed_positions)
-        
+
         if current_closed > closed_positions_count:
             new_positions = current_closed - closed_positions_count
             logger.info(f"[HEADLESS] Новые закрытые позиции: +{new_positions}, всего: {current_closed}")
-            
+
             # Анализируем новые закрытые позиции
             for i in range(closed_positions_count, current_closed):
                 pos = simulator.order_manager.closed_positions[i]
-                
+
                 # Обновляем статистику
                 if pos.profit > max_profit:
                     max_profit = pos.profit
                 if pos.profit < min_profit or min_profit == 0:
                     min_profit = pos.profit
                 profit_sum += pos.profit
-                
+
                 # Отслеживаем статистику по уровням
                 level = pos.level if hasattr(pos, "level") else 0
                 position_count_by_levels[level] = position_count_by_levels.get(level, 0) + 1
                 level_profits[level] = level_profits.get(level, 0) + pos.profit
-                
+
                 # Логируем детали закрытой позиции
-                logger.info(f"[HEADLESS] Позиция {i+1}: {pos.order_type}, вход={pos.entry_price:.2f}, "
-                           f"выход={pos.exit_price:.2f}, объем={pos.volume:.8f}, прибыль={pos.profit:.2f}, уровень={level}")
-            
+                logger.info(
+                    f"[HEADLESS] Позиция {i+1}: {pos.order_type}, вход={pos.entry_price:.2f}, "
+                    f"выход={pos.exit_price:.2f}, объем={pos.volume:.8f}, прибыль={pos.profit:.2f}, уровень={level}"
+                )
+
             closed_positions_count = current_closed
-            
+
             # Логируем состояние баланса и маржи
             balance = simulator.order_manager.get_balance()
             free_margin = simulator.order_manager.get_free_margin()
             floating_profit = simulator.order_manager.calculate_floating_profit(simulator.current_price)
-            
-            logger.info(f"[HEADLESS] Баланс: {balance:.2f}, Своб. маржа: {free_margin:.2f}, Плав. прибыль: {floating_profit:.2f}")
-            
+
+            logger.info(
+                f"[HEADLESS] Баланс: {balance:.2f}, Своб. маржа: {free_margin:.2f}, Плав. прибыль: {floating_profit:.2f}"
+            )
+
             # Вычисляем и логируем скорость обработки позиций
             elapsed_time = time.time() - start_time
             positions_per_minute = (current_closed / elapsed_time) * 60
-            logger.info(f"[HEADLESS] Скорость обработки: {positions_per_minute:.2f} позиций/мин, прошло времени: {elapsed_time:.2f}с")
-            
+            logger.info(
+                f"[HEADLESS] Скорость обработки: {positions_per_minute:.2f} позиций/мин, прошло времени: {elapsed_time:.2f}с"
+            )
+
             # Логируем информацию о незакрытых позициях
             open_positions = simulator.order_manager.get_open_positions()
             open_buy = [p for p in open_positions if p.order_type == "buy"]
             open_sell = [p for p in open_positions if p.order_type == "sell"]
-            
-            logger.info(f"[HEADLESS] Открытые позиции: Buy: {len(open_buy)}, Sell: {len(open_sell)}, " 
-                       f"Дифф: {len(open_buy) - len(open_sell)}")
-            
+
+            logger.info(
+                f"[HEADLESS] Открытые позиции: Buy: {len(open_buy)}, Sell: {len(open_sell)}, "
+                f"Дифф: {len(open_buy) - len(open_sell)}"
+            )
+
             # Логируем общую статистику
             if current_closed > 0:
                 avg_profit = profit_sum / current_closed
-                logger.info(f"[HEADLESS] Статистика: Средняя прибыль: {avg_profit:.2f}, Макс.: {max_profit:.2f}, Мин.: {min_profit:.2f}")
-                
+                logger.info(
+                    f"[HEADLESS] Статистика: Средняя прибыль: {avg_profit:.2f}, Макс.: {max_profit:.2f}, Мин.: {min_profit:.2f}"
+                )
+
                 # Статистика по уровням
                 level_stats = []
                 for level, count in sorted(position_count_by_levels.items()):
                     avg_level_profit = level_profits[level] / count
                     level_stats.append(f"L{level}:{count}шт({avg_level_profit:.2f})")
-                
+
                 logger.info(f"[HEADLESS] Статистика по уровням: {', '.join(level_stats)}")
-        
+
         # Проверяем условие остановки
         if stop_after_positions and current_closed >= max_positions:
             logger.info(f"[HEADLESS] Достигнуто макс. число позиций ({max_positions}), завершение")
-            
+
             # Печатаем финальный отчет перед завершением
             print_final_report()
-            
+
             # Останавливаем таймеры и симуляцию
             check_timer.stop()
             simulator.stop()
             app.quit()
-    
+
     def print_final_report():
         # Формируем финальный отчет о результатах симуляции
         total_closed = len(simulator.order_manager.closed_positions)
         final_balance = simulator.order_manager.get_balance()
         initial_balance = 100000  # Из параметров симулятора
         profit = final_balance - initial_balance
-        
-        logger.info("\n" + "="*50)
+
+        logger.info("\n" + "=" * 50)
         logger.info(f"[HEADLESS] ИТОГОВЫЙ ОТЧЕТ")
-        logger.info("="*50)
+        logger.info("=" * 50)
         logger.info(f"[HEADLESS] Всего закрыто позиций: {total_closed}")
         logger.info(f"[HEADLESS] Начальный баланс: {initial_balance:.2f}")
         logger.info(f"[HEADLESS] Конечный баланс: {final_balance:.2f}")
         logger.info(f"[HEADLESS] Итоговая прибыль: {profit:.2f} ({(profit/initial_balance)*100:.2f}%)")
-        
+
         if total_closed > 0:
             logger.info(f"[HEADLESS] Средняя прибыль на позицию: {profit_sum/total_closed:.2f}")
             logger.info(f"[HEADLESS] Макс. прибыль: {max_profit:.2f}, Мин. прибыль: {min_profit:.2f}")
-            
+
             # Статистика по типам позиций
             buy_positions = [p for p in simulator.order_manager.closed_positions if p.order_type == "buy"]
             sell_positions = [p for p in simulator.order_manager.closed_positions if p.order_type == "sell"]
-            
+
             buy_profit = sum(p.profit for p in buy_positions)
             sell_profit = sum(p.profit for p in sell_positions)
-            
+
             logger.info(f"[HEADLESS] Buy позиции: {len(buy_positions)}, прибыль: {buy_profit:.2f}")
             logger.info(f"[HEADLESS] Sell позиции: {len(sell_positions)}, прибыль: {sell_profit:.2f}")
-            
+
             # Подробная статистика по уровням
             logger.info("[HEADLESS] Статистика по уровням:")
             for level, count in sorted(position_count_by_levels.items()):
                 avg_level_profit = level_profits[level] / count
                 pct = (count / total_closed) * 100
-                logger.info(f"[HEADLESS]   Уровень {level}: {count} позиций ({pct:.1f}%), "
-                           f"прибыль: {level_profits[level]:.2f}, средняя: {avg_level_profit:.2f}")
+                logger.info(
+                    f"[HEADLESS]   Уровень {level}: {count} позиций ({pct:.1f}%), "
+                    f"прибыль: {level_profits[level]:.2f}, средняя: {avg_level_profit:.2f}"
+                )
+            
+            # Расширенная статистика эффективности торговли
+            if total_closed > 0:
+                # Подсчитываем прибыльные и убыточные сделки
+                profitable_positions = [p for p in simulator.order_manager.closed_positions if p.profit > 0]
+                losing_positions = [p for p in simulator.order_manager.closed_positions if p.profit <= 0]
                 
-        logger.info("="*50)
-        
+                profitable_count = len(profitable_positions)
+                losing_count = len(losing_positions)
+                win_rate = (profitable_count / total_closed) * 100
+                
+                # Средняя прибыль и убыток
+                avg_win = sum(p.profit for p in profitable_positions) / profitable_count if profitable_count > 0 else 0
+                avg_loss = sum(p.profit for p in losing_positions) / losing_count if losing_count > 0 else 0
+                
+                # Соотношение прибыль/риск
+                risk_reward_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+                
+                logger.info("=" * 40)
+                logger.info("[HEADLESS] РАСШИРЕННАЯ СТАТИСТИКА ЭФФЕКТИВНОСТИ")
+                logger.info(f"[HEADLESS] Прибыльные сделки: {profitable_count} ({win_rate:.1f}%)")
+                logger.info(f"[HEADLESS] Убыточные сделки: {losing_count} ({100-win_rate:.1f}%)")
+                logger.info(f"[HEADLESS] Средняя прибыль на выигрышную сделку: {avg_win:.2f}")
+                logger.info(f"[HEADLESS] Средний убыток на проигрышную сделку: {avg_loss:.2f}")
+                logger.info(f"[HEADLESS] Соотношение прибыль/риск: {risk_reward_ratio:.2f}")
+                
+                # Статистика по времени удержания позиций, если доступны временные метки
+                if all(hasattr(p, 'exit_time') and hasattr(p, 'entry_time') for p in simulator.order_manager.closed_positions):
+                    durations = [(p.exit_time - p.entry_time) for p in simulator.order_manager.closed_positions]
+                    avg_duration = sum(durations) / len(durations) if durations else 0
+                    max_duration = max(durations) if durations else 0
+                    min_duration = min(durations) if durations else 0
+                    
+                    logger.info(f"[HEADLESS] Среднее время удержания позиций: {avg_duration:.2f} тиков")
+                    logger.info(f"[HEADLESS] Максимальное время удержания: {max_duration:.2f} тиков")
+                    logger.info(f"[HEADLESS] Минимальное время удержания: {min_duration:.2f} тиков")
+                
+                # Статистика по объемам позиций
+                volumes = [p.volume for p in simulator.order_manager.closed_positions]
+                avg_volume = sum(volumes) / len(volumes) if volumes else 0
+                max_volume = max(volumes) if volumes else 0
+                min_volume = min(volumes) if volumes else 0
+                
+                logger.info(f"[HEADLESS] Средний объем позиции: {avg_volume:.8f}")
+                logger.info(f"[HEADLESS] Диапазон объемов: {min_volume:.8f} - {max_volume:.8f}")
+                
+                # Анализ комиссий и их влияния на прибыль
+                total_commission = sum(p.commission for p in simulator.order_manager.closed_positions)
+                avg_commission = total_commission / total_closed
+                commission_percent = (total_commission / abs(profit_sum)) * 100 if profit_sum != 0 else 0
+                
+                logger.info(f"[HEADLESS] Общие комиссии: {total_commission:.2f}")
+                logger.info(f"[HEADLESS] Средняя комиссия на сделку: {avg_commission:.2f}")
+                logger.info(f"[HEADLESS] Комиссии в % от прибыли: {commission_percent:.2f}%")
+
+        logger.info("=" * 50)
+
         # Информация о текущих открытых позициях
         open_positions = simulator.order_manager.get_open_positions()
         if open_positions:
             logger.info(f"[HEADLESS] Осталось {len(open_positions)} открытых позиций")
             for i, pos in enumerate(open_positions):
-                floating = (simulator.current_price - pos.entry_price) * pos.volume if pos.order_type == "buy" else \
-                          (pos.entry_price - simulator.current_price) * pos.volume
-                logger.info(f"[HEADLESS]   {i+1}: {pos.order_type}, вход={pos.entry_price:.2f}, "
-                           f"текущая цена={simulator.current_price:.2f}, объем={pos.volume:.8f}, "
-                           f"плав. прибыль={floating:.2f}, уровень={getattr(pos, 'level', 0)}")
-    
+                floating = (
+                    (simulator.current_price - pos.entry_price) * pos.volume
+                    if pos.order_type == "buy"
+                    else (pos.entry_price - simulator.current_price) * pos.volume
+                )
+                logger.info(
+                    f"[HEADLESS]   {i+1}: {pos.order_type}, вход={pos.entry_price:.2f}, "
+                    f"текущая цена={simulator.current_price:.2f}, объем={pos.volume:.8f}, "
+                    f"плав. прибыль={floating:.2f}, уровень={getattr(pos, 'level', 0)}"
+                )
+
     # Запускаем таймер проверки
     check_timer.timeout.connect(check_positions)
     check_timer.start(500)  # проверка каждые 500 мс
-    
+
     # Запускаем таймер для мониторинга прогресса
     progress_timer = QtCore.QTimer()
-    progress_timer.timeout.connect(lambda: logger.info(
-        f"[HEADLESS] Прогресс: {len(simulator.order_manager.closed_positions)}/{max_positions} позиций, "
-        f"прошло {(time.time() - start_time)/60:.1f} мин"
-    ))
+    progress_timer.timeout.connect(
+        lambda: logger.info(
+            f"[HEADLESS] Прогресс: {len(simulator.order_manager.closed_positions)}/{max_positions} позиций, "
+            f"прошло {(time.time() - start_time)/60:.1f} мин"
+        )
+    )
     progress_timer.start(30000)  # каждые 30 секунд
-    
+
     # Запускаем таймер для принудительного завершения (защита от зависания)
     max_runtime_timer = QtCore.QTimer()
-    max_runtime_timer.timeout.connect(lambda: (
-        logger.warning("[HEADLESS] Достигнуто максимальное время работы, принудительное завершение"),
-        print_final_report(),
-        simulator.stop(),
-        app.quit()
-    ))
+    max_runtime_timer.timeout.connect(
+        lambda: (
+            logger.warning("[HEADLESS] Достигнуто максимальное время работы, принудительное завершение"),
+            print_final_report(),
+            simulator.stop(),
+            app.quit(),
+        )
+    )
     max_runtime_timer.setSingleShot(True)
     max_runtime_timer.start(timeout * 1000)  # тайм-аут в секундах
-    
+
     # Запускаем симуляцию
     logger.info("[HEADLESS] Запуск симуляции")
     simulator.start()
-    
+
     # Запускаем событийный цикл
     app.exec_()
-    
+
     # Логируем итоговые результаты
     total_closed = len(simulator.order_manager.closed_positions)
     final_balance = simulator.order_manager.get_balance()
-    
+
     logger.info(f"[HEADLESS] Симуляция завершена. Всего закрыто позиций: {total_closed}")
     logger.info(f"[HEADLESS] Итоговый баланс: {final_balance:.2f}")
 
+
 def main():
     # Парсинг аргументов командной строки
-    parser = argparse.ArgumentParser(description='Grid Visualizer')
-    parser.add_argument('--headless', action='store_true', help='Запуск в безголовом режиме без GUI')
-    parser.add_argument('--csv', type=str, help='Путь к CSV файлу с данными')
-    parser.add_argument('--max-positions', type=int, default=30, help='Максимальное количество позиций для обработки')
-    parser.add_argument('--profile', action='store_true', help='Запуск с профилированием')
-    parser.add_argument('--no-stop', action='store_true', help='Не останавливать симуляцию после достижения макс. позиций')
-    parser.add_argument('--timeout', type=int, default=300, help='Тайм-аут в секундах для безголового режима (по умолчанию 300)')
-    parser.add_argument('--output', type=str, help='Путь для сохранения отчета о симуляции')
-    
+    parser = argparse.ArgumentParser(description="Grid Visualizer")
+    parser.add_argument("--headless", action="store_true", help="Запуск в безголовом режиме без GUI")
+    parser.add_argument("--csv", type=str, help="Путь к CSV файлу с данными")
+    parser.add_argument("--max-positions", type=int, default=30, help="Максимальное количество позиций для обработки")
+    parser.add_argument("--profile", action="store_true", help="Запуск с профилированием")
+    parser.add_argument(
+        "--no-stop", action="store_true", help="Не останавливать симуляцию после достижения макс. позиций"
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=300, help="Тайм-аут в секундах для безголового режима (по умолчанию 300)"
+    )
+    parser.add_argument("--output", type=str, help="Путь для сохранения отчета о симуляции")
+
     args = parser.parse_args()
-    
+
     # Запуск в безголовом режиме, если указан соответствующий аргумент
     if args.headless:
         # Настраиваем параметры для безголового режима
         stop_after_positions = not args.no_stop
-        
+
         # Запускаем симуляцию с расширенными параметрами
         run_headless_simulation(
-            csv_file=args.csv, 
+            csv_file=args.csv,
             max_positions=args.max_positions,
             stop_after_positions=stop_after_positions,
             timeout=args.timeout,
-            output_path=args.output
+            output_path=args.output,
         )
         return
-    
+
     # Запуск с профилированием, если указан соответствующий аргумент
     if args.profile:
         profile_main()
         return
-    
+
     # Обычный запуск с GUI
     logger = setup_logging()
     logger.info("Запуск приложения")

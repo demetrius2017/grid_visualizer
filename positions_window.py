@@ -75,10 +75,72 @@ class PositionsWindow(QtWidgets.QWidget):
 
         options_history_tab.setLayout(options_history_layout)
 
+        # Новая вкладка для информации об адаптивной сетке
+        adaptive_grid_tab = QtWidgets.QWidget()
+        adaptive_grid_layout = QtWidgets.QVBoxLayout()
+
+        # Группа информации о скорости сделок
+        trade_speed_group = QtWidgets.QGroupBox("Скорость сделок")
+        trade_speed_layout = QtWidgets.QFormLayout()
+        
+        self.buy_speed_label = QtWidgets.QLabel("0.0")
+        self.sell_speed_label = QtWidgets.QLabel("0.0")
+        self.buy_interval_label = QtWidgets.QLabel("0.0")
+        self.sell_interval_label = QtWidgets.QLabel("0.0")
+        self.buy_history_label = QtWidgets.QLabel("0")
+        self.sell_history_label = QtWidgets.QLabel("0")
+        
+        trade_speed_layout.addRow("Скорость BUY (сделок/тик):", self.buy_speed_label)
+        trade_speed_layout.addRow("Скорость SELL (сделок/тик):", self.sell_speed_label)
+        trade_speed_layout.addRow("Средний интервал BUY (тики):", self.buy_interval_label)
+        trade_speed_layout.addRow("Средний интервал SELL (тики):", self.sell_interval_label)
+        trade_speed_layout.addRow("Размер истории BUY:", self.buy_history_label)
+        trade_speed_layout.addRow("Размер истории SELL:", self.sell_history_label)
+        
+        trade_speed_group.setLayout(trade_speed_layout)
+        adaptive_grid_layout.addWidget(trade_speed_group)
+        
+        # Группа информации о шаге сетки
+        grid_step_group = QtWidgets.QGroupBox("Адаптивный шаг сетки")
+        grid_step_layout = QtWidgets.QFormLayout()
+        
+        self.base_grid_step_label = QtWidgets.QLabel("0.0%")
+        self.current_buy_step_label = QtWidgets.QLabel("0.0%")
+        self.current_sell_step_label = QtWidgets.QLabel("0.0%")
+        self.min_grid_step_label = QtWidgets.QLabel("0.0%")
+        self.buy_step_multiplier_label = QtWidgets.QLabel("1.0")
+        self.sell_step_multiplier_label = QtWidgets.QLabel("1.0")
+        
+        grid_step_layout.addRow("Базовый шаг сетки:", self.base_grid_step_label)
+        grid_step_layout.addRow("Текущий шаг BUY:", self.current_buy_step_label)
+        grid_step_layout.addRow("Текущий шаг SELL:", self.current_sell_step_label)
+        grid_step_layout.addRow("Минимальный шаг:", self.min_grid_step_label)
+        grid_step_layout.addRow("Множитель BUY:", self.buy_step_multiplier_label)
+        grid_step_layout.addRow("Множитель SELL:", self.sell_step_multiplier_label)
+        
+        grid_step_group.setLayout(grid_step_layout)
+        adaptive_grid_layout.addWidget(grid_step_group)
+        
+        # Счетчики последовательных сделок
+        consecutive_group = QtWidgets.QGroupBox("Последовательные сделки")
+        consecutive_layout = QtWidgets.QFormLayout()
+        
+        self.consecutive_buys_label = QtWidgets.QLabel("0")
+        self.consecutive_sells_label = QtWidgets.QLabel("0")
+        
+        consecutive_layout.addRow("Последовательных BUY:", self.consecutive_buys_label)
+        consecutive_layout.addRow("Последовательных SELL:", self.consecutive_sells_label)
+        
+        consecutive_group.setLayout(consecutive_layout)
+        adaptive_grid_layout.addWidget(consecutive_group)
+        
+        adaptive_grid_tab.setLayout(adaptive_grid_layout)
+
         # Добавляем вкладки
         self.tab_widget.addTab(positions_tab, "Positions")
         self.tab_widget.addTab(options_tab, "Active Options")
         self.tab_widget.addTab(options_history_tab, "Options History")
+        self.tab_widget.addTab(adaptive_grid_tab, "Адаптивная сетка")
 
         # Добавляем сводку
         self.summary_label = QtWidgets.QLabel()
@@ -98,7 +160,10 @@ class PositionsWindow(QtWidgets.QWidget):
         free_margin=None,
         floating_profit=None,
         open_orders_count=None,
-        total_trades_count=None
+        total_trades_count=None,
+        # Добавляем новые параметры для адаптивной сетки
+        trade_speed_stats=None,
+        grid_steps=None
     ):
         # Улучшенное логирование для математической отладки позиций
         import logging
@@ -198,6 +263,37 @@ class PositionsWindow(QtWidgets.QWidget):
                 f"Total Payouts: {total_payout:.8f}\n"
                 f"Net Result: {net_result:.8f}"
             )
+        
+        # Обновление информации об адаптивной сетке
+        if trade_speed_stats:
+            # Обновляем скорость сделок
+            self.buy_speed_label.setText(f"{trade_speed_stats.get('buy_speed', 0.0):.6f}")
+            self.sell_speed_label.setText(f"{trade_speed_stats.get('sell_speed', 0.0):.6f}")
+            self.buy_interval_label.setText(f"{trade_speed_stats.get('buy_avg_interval', 0.0):.1f}")
+            self.sell_interval_label.setText(f"{trade_speed_stats.get('sell_avg_interval', 0.0):.1f}")
+            self.buy_history_label.setText(f"{trade_speed_stats.get('buy_history_size', 0)}")
+            self.sell_history_label.setText(f"{trade_speed_stats.get('sell_history_size', 0)}")
+            self.consecutive_buys_label.setText(f"{trade_speed_stats.get('buy_consecutive', 0)}")
+            self.consecutive_sells_label.setText(f"{trade_speed_stats.get('sell_consecutive', 0)}")
+        
+        # Обновление информации о шаге сетки
+        if grid_steps:
+            base_step = grid_steps.get('base_step', 0.0)
+            buy_step = grid_steps.get('buy_step', 0.0)
+            sell_step = grid_steps.get('sell_step', 0.0)
+            min_step = grid_steps.get('min_step', 0.0)
+            
+            # Рассчитываем множители относительно базового шага
+            buy_multiplier = buy_step / base_step if base_step > 0 else 1.0
+            sell_multiplier = sell_step / base_step if base_step > 0 else 1.0
+            
+            # Обновляем метки
+            self.base_grid_step_label.setText(f"{base_step:.4f}%")
+            self.current_buy_step_label.setText(f"{buy_step:.4f}%")
+            self.current_sell_step_label.setText(f"{sell_step:.4f}%")
+            self.min_grid_step_label.setText(f"{min_step:.4f}%")
+            self.buy_step_multiplier_label.setText(f"{buy_multiplier:.2f}x")
+            self.sell_step_multiplier_label.setText(f"{sell_multiplier:.2f}x")
             
         # Обновление общей сводки с информацией о марже
         total_profit = sum(position.profit for position in closed_positions)
@@ -258,6 +354,11 @@ class PositionsWindow(QtWidgets.QWidget):
         else:
             summary_text.append("СВОБОДНАЯ МАРЖА: Нет данных")
             
+        # Добавляем информацию о текущем шаге сетки
+        if grid_steps:
+            summary_text.append("-" * 40)
+            summary_text.append(f"АДАПТИВНЫЙ ШАГ: BUY={grid_steps.get('buy_step', 0.0):.4f}%, SELL={grid_steps.get('sell_step', 0.0):.4f}%")
+        
         # Заключительный разделитель
         summary_text.append("=" * 40)
 
@@ -271,3 +372,19 @@ class PositionsWindow(QtWidgets.QWidget):
         self.options_history_table.setRowCount(0)
         self.summary_label.setText("")
         self.options_stats_label.setText("")
+        
+        # Очищаем информацию об адаптивной сетке
+        self.buy_speed_label.setText("0.0")
+        self.sell_speed_label.setText("0.0")
+        self.buy_interval_label.setText("0.0")
+        self.sell_interval_label.setText("0.0")
+        self.buy_history_label.setText("0")
+        self.sell_history_label.setText("0")
+        self.consecutive_buys_label.setText("0")
+        self.consecutive_sells_label.setText("0")
+        self.base_grid_step_label.setText("0.0%")
+        self.current_buy_step_label.setText("0.0%")
+        self.current_sell_step_label.setText("0.0%")
+        self.min_grid_step_label.setText("0.0%")
+        self.buy_step_multiplier_label.setText("1.0")
+        self.sell_step_multiplier_label.setText("1.0")

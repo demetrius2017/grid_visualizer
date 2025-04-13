@@ -482,6 +482,28 @@ class TradingSimulator:
         active_options = self.order_manager.options_manager.active_options
         options_history = self.order_manager.options_manager.options_history[-50:]  # Последние 50 операций
         
+        # Получаем информацию о скорости сделок
+        trade_speed_stats = {
+            'buy_speed': self.order_manager.buy_trade_speed,
+            'sell_speed': self.order_manager.sell_trade_speed,
+            'buy_avg_interval': 1.0 / self.order_manager.buy_trade_speed if self.order_manager.buy_trade_speed > 0 else 0,
+            'sell_avg_interval': 1.0 / self.order_manager.sell_trade_speed if self.order_manager.sell_trade_speed > 0 else 0,
+            'buy_history_size': len(self.order_manager.buy_trades_history),
+            'sell_history_size': len(self.order_manager.sell_trades_history),
+            'buy_consecutive': self.order_manager.consecutive_buys,
+            'sell_consecutive': self.order_manager.consecutive_sells
+        }
+        
+        # Получаем информацию о шаге сетки
+        buy_step = self.order_manager.calculate_dynamic_grid_step('buy')
+        sell_step = self.order_manager.calculate_dynamic_grid_step('sell')
+        grid_steps = {
+            'base_step': self.order_manager.base_grid_step,
+            'buy_step': buy_step,
+            'sell_step': sell_step,
+            'min_step': self.order_manager.min_grid_step
+        }
+        
         # Обновляем окно позиций с передачей всех необходимых параметров
         self.positions_window.update_positions(
             open_positions,
@@ -493,7 +515,9 @@ class TradingSimulator:
             free_margin=free_margin,
             floating_profit=floating_profit,
             open_orders_count=open_orders_count,
-            total_trades_count=total_trades_count
+            total_trades_count=total_trades_count,
+            trade_speed_stats=trade_speed_stats,
+            grid_steps=grid_steps
         )
 
     def mouse_moved(self, evt):

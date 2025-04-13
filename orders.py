@@ -3,6 +3,7 @@ import numpy as np
 from scipy import stats
 import logging
 from options_manager import OptionsManager
+from core.adaptive_grid import TradeSpeedCalculator  # Импорт класса для адаптивного шага сетки
 
 
 # Константы для комиссий Binance
@@ -131,6 +132,16 @@ class OrderManager:
         self.consecutive_sells = 0
         self.total_profit = 0
         self.total_commission = 0
+        # Атрибуты для отслеживания скорости сделок
+        self.buy_trades_history = []  # История сделок на покупку [тик, цена]
+        self.sell_trades_history = []  # История сделок на продажу [тик, цена]
+        self.trade_speed_window = 20  # Окно для расчета скорости (количество последних сделок)
+        self.last_buy_trade_tick = 0  # Последний тик сделки на покупку
+        self.last_sell_trade_tick = 0  # Последний тик сделки на продажу
+        self.buy_trade_speed = 0.0  # Скорость сделок на покупку (сделок/тик)
+        self.sell_trade_speed = 0.0  # Скорость сделок на продажу (сделок/тик)
+        self.base_trade_speed = 0.05  # Базовая скорость сделок (для нормализации)
+        self.min_grid_step = (MAKER_COMMISSION_RATE + TAKER_COMMISSION_RATE) * 2 * 100  # Минимальный шаг в процентах
         # Существующая инициализация...
         self.options_manager = OptionsManager()
         self.hedge_active = False
@@ -507,7 +518,7 @@ class OrderManager:
         # чтобы оставить запас для будущих ордеров и контр-ордеров
         margin_for_grid = self.free_margin * 0.30
 
-        # Средняя цена для расчета (можно использовать EMA или текущую цену)
+        # Средняя цена для расчета (можно использовать EMA or текущую цену)
         avg_price = self.current_ema if self.current_ema else current_price
 
         # Вычисляем базовый объем
@@ -887,6 +898,9 @@ class OrderManager:
                 order.execution_time = timestamp
                 order.executed = True
 
+                # Обновляем статистику скорости сделок
+                self.update_trade_speed(order.order_type, timestamp)
+                
                 # Рассчитываем уровень сетки для ордера относительно EMA
                 grid_level = self.calculate_grid_level(order.order_type, order.price)
 
@@ -934,6 +948,7 @@ class OrderManager:
 
                 # Добавляем в историю исполненных ордеров
                 self.order_history.append(order)
+                self.executed_orders_history.append(order)
 
                 # Логируем исполнение
                 logger.info(
@@ -1115,12 +1130,57 @@ class OrderManager:
     #     pass
 
     def calculate_dynamic_grid_step(self, order_type):
-        if order_type == "buy":
-            multiplier = min(2**self.consecutive_buys, self.max_grid_step_multiplier)
-        else:  # sell
-            multiplier = min(2**self.consecutive_sells, self.max_grid_step_multiplier)
-
-        return self.base_grid_step * multiplier
+        """
+        Рассчитывает динамический шаг сетки на основе скорости сделок.
+        Шаг адаптивно увеличивается при росте скорости сделок и уменьшается при падении.
+        Никогда не опускается ниже минимального безопасного значения.
+        
+        Args:
+            order_type: тип ордера ("buy" or "sell")
+            
+        Returns:
+            float: шаг сетки в процентах
+        """
+        logger = logging.getLogger("grid_visualizer")
+        
+        # Определяем текущую скорость сделок для заданного типа ордера
+        trade_speed = self.buy_trade_speed if order_type == "buy" else self.sell_trade_speed
+        
+        # Если скорость сделок ещё не измерена (нет истории), используем старый метод
+        if trade_speed <= 0.000001:
+            if order_type == "buy":
+                multiplier = min(2**self.consecutive_buys, self.max_grid_step_multiplier)
+            else:  # sell
+                multiplier = min(2**self.consecutive_sells, self.max_grid_step_multiplier)
+            
+            return max(self.base_grid_step * multiplier, self.min_grid_step)
+        
+        # Вычисляем коэффициент изменения шага на основе отношения текущей скорости к базовой
+        speed_ratio = trade_speed / self.base_trade_speed
+        
+        # Логирование для отладки
+        logger.debug(f"[GRID_STEP] {order_type} trade_speed={trade_speed:.6f}, base_speed={self.base_trade_speed:.6f}, ratio={speed_ratio:.2f}")
+        
+        # Если скорость выше базовой, увеличиваем шаг пропорционально
+        if speed_ratio > 1.0:
+            # Ограничиваем максимальный множитель
+            multiplier = min(speed_ratio, self.max_grid_step_multiplier)
+            logger.info(f"[GRID_STEP] Увеличение шага {order_type} из-за высокой скорости сделок: x{multiplier:.2f}")
+        # Если скорость ниже базовой, уменьшаем шаг пропорционально, но не ниже минимального
+        else:
+            # Множитель минимум 0.5 (уменьшение шага не более чем в 2 раза)
+            multiplier = max(speed_ratio, 0.5)
+            if multiplier < 0.8:  # Если шаг уменьшается более чем на 20%, логируем
+                logger.info(f"[GRID_STEP] Уменьшение шага {order_type} из-за низкой скорости сделок: x{multiplier:.2f}")
+        
+        # Рассчитываем новый шаг и гарантируем, что он не ниже минимального
+        grid_step = max(self.base_grid_step * multiplier, self.min_grid_step)
+        
+        # Если шаг изменился значительно, логируем
+        if abs(grid_step - self.base_grid_step) / self.base_grid_step > 0.2:  # Изменение более 20%
+            logger.info(f"[GRID_STEP] Новый шаг для {order_type}: {grid_step:.6f}% (базовый: {self.base_grid_step:.6f}%)")
+        
+        return grid_step
 
     def print_orders(self):
         print("\nТекущая сетка ордеров:")
@@ -1829,7 +1889,7 @@ class OrderManager:
         old_ema = self.current_ema
         self.current_ema = new_ema
 
-        # Если изменение значительное или сетка не инициализирована
+        # Если изменение значительное or сетка не инициализирована
         if significant_change or not self.initial_grid_created:
             logger = logging.getLogger("grid_visualizer")
             logger.info(
@@ -1952,7 +2012,7 @@ class OrderManager:
             timestamp: временная метка
 
         Returns:
-            bool: True если были исполнены ордера или обновлена сетка
+            bool: True если были исполнены ордера or обновлена сетка
         """
         # Обновляем текущие значения
         self.current_price = current_price
@@ -2002,5 +2062,77 @@ class OrderManager:
                 # Обновляем хеджирующие позиции
                 self.options_manager.update_hedge_positions(current_price)
 
-        # Возвращаем True, если были исполнены ордера или обновлена сетка
+        # Возвращаем True, если были исполнены ордера or обновлена сетка
         return executed_orders or grid_updated
+
+    def update_trade_speed(self, order_type, timestamp):
+        """
+        Обновляет скорость сделок для заданного типа ордеров.
+        Скорость измеряется в относительном тиковом времени (сделок/тик).
+        
+        Args:
+            order_type: тип ордера ("buy" or "sell")
+            timestamp: текущая временная метка (тик)
+        """
+        logger = logging.getLogger("grid_visualizer")
+        
+        if order_type == "buy":
+            # Рассчитываем время (в тиках) с последней сделки на покупку
+            if self.last_buy_trade_tick > 0:
+                ticks_since_last_trade = timestamp - self.last_buy_trade_tick
+                
+                # Добавляем информацию о сделке в историю
+                self.buy_trades_history.append([timestamp, ticks_since_last_trade])
+                
+                # Ограничиваем размер истории
+                if len(self.buy_trades_history) > self.trade_speed_window:
+                    self.buy_trades_history.pop(0)
+                
+                # Рассчитываем среднюю скорость сделок (1/среднее время между сделками)
+                if len(self.buy_trades_history) > 0:
+                    avg_ticks_between_trades = sum(trade[1] for trade in self.buy_trades_history) / len(self.buy_trades_history)
+                    if avg_ticks_between_trades > 0:
+                        new_speed = 1.0 / avg_ticks_between_trades
+                        
+                        # Если скорость изменилась значительно, логируем
+                        speed_change = abs(new_speed - self.buy_trade_speed) / max(self.buy_trade_speed, 0.0001)
+                        if speed_change > 0.3:  # Изменение более чем на 30%
+                            logger.info(f"[TRADE_SPEED] Значительное изменение скорости BUY сделок: {self.buy_trade_speed:.6f} -> {new_speed:.6f} (изменение: {speed_change:.2%})")
+                        
+                        self.buy_trade_speed = new_speed
+            
+            # Обновляем временную метку последней сделки
+            self.last_buy_trade_tick = timestamp
+            
+        elif order_type == "sell":
+            # Рассчитываем время (в тиках) с последней сделки на продажу
+            if self.last_sell_trade_tick > 0:
+                ticks_since_last_trade = timestamp - self.last_sell_trade_tick
+                
+                # Добавляем информацию о сделке в историю
+                self.sell_trades_history.append([timestamp, ticks_since_last_trade])
+                
+                # Ограничиваем размер истории
+                if len(self.sell_trades_history) > self.trade_speed_window:
+                    self.sell_trades_history.pop(0)
+                
+                # Рассчитываем среднюю скорость сделок (1/среднее время между сделками)
+                if len(self.sell_trades_history) > 0:
+                    avg_ticks_between_trades = sum(trade[1] for trade in self.sell_trades_history) / len(self.sell_trades_history)
+                    if avg_ticks_between_trades > 0:
+                        new_speed = 1.0 / avg_ticks_between_trades
+                        
+                        # Если скорость изменилась значительно, логируем
+                        speed_change = abs(new_speed - self.sell_trade_speed) / max(self.sell_trade_speed, 0.0001)
+                        if speed_change > 0.3:  # Изменение более чем на 30%
+                            logger.info(f"[TRADE_SPEED] Значительное изменение скорости SELL сделок: {self.sell_trade_speed:.6f} -> {new_speed:.6f} (изменение: {speed_change:.2%})")
+                        
+                        self.sell_trade_speed = new_speed
+            
+            # Обновляем временную метку последней сделки
+            self.last_sell_trade_tick = timestamp
+        
+        # Логируем текущие скорости, если они изменorсь существенно
+        logger.debug(f"[TRADE_SPEED] Текущие скорости сделок: BUY={self.buy_trade_speed:.6f}, SELL={self.sell_trade_speed:.6f}")
+        
+        return self.buy_trade_speed if order_type == "buy" else self.sell_trade_speed
